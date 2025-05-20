@@ -23,7 +23,11 @@ from .preprocessing import StandardScaler
 from .utils._array_api import _expit, device, get_namespace, size
 from .utils._param_validation import HasMethods, Interval, StrOptions
 from .utils.extmath import softmax
-from .utils.multiclass import check_classification_targets, unique_labels
+from .utils.multiclass import (
+    _check_partial_fit_first_call,
+    check_classification_targets,
+    unique_labels,
+)
 from .utils.validation import check_is_fitted, validate_data
 
 __all__ = ["LinearDiscriminantAnalysis", "QuadraticDiscriminantAnalysis"]
@@ -262,7 +266,8 @@ class LinearDiscriminantAnalysis(
 
     The fitted model can also be used to reduce the dimensionality of the input
     by projecting it to the most discriminative directions, using the
-    `transform` method.
+    `transform` method. Incremental learning can be performed with
+    :meth:`partial_fit` without storing past data.
 
     .. versionadded:: 0.17
 
@@ -834,6 +839,131 @@ class LinearDiscriminantAnalysis(
         tags = super().__sklearn_tags__()
         tags.array_api_support = True
         return tags
+
+    @_fit_context(prefer_skip_nested_validation=True)
+    def partial_fit(self, X, y, classes=None):
+        """Incremental fit on a batch of samples.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Training data.
+
+        y : array-like of shape (n_samples,)
+            Target values.
+
+        classes : array-like of shape (n_classes,), default=None
+            List of all the classes that can appear in ``y``. Must be
+            provided at the first call to ``partial_fit``.
+
+        Returns
+        -------
+        self : object
+            Fitted estimator.
+        """
+
+        first_call = _check_partial_fit_first_call(self, classes)
+        X, y = validate_data(self, X, y, reset=first_call)
+
+        if first_call:
+            n_features = X.shape[1]
+            n_classes = self.classes_.shape[0]
+
+            self.class_count_ = np.zeros(n_classes)
+            self.class_sum_ = np.zeros((n_classes, n_features))
+            self.class_sum_sq_ = np.zeros((n_classes, n_features, n_features))
+
+        if X.shape[1] != self.class_sum_.shape[1]:
+            raise ValueError(
+                "Number of features %d does not match previous data %d."
+                % (X.shape[1], self.class_sum_.shape[1])
+            )
+
+        for idx, group in enumerate(self.classes_):
+            mask = y == group
+            if not np.any(mask):
+                continue
+            Xg = X[mask]
+            self.class_count_[idx] += Xg.shape[0]
+            self.class_sum_[idx] += np.sum(Xg, axis=0)
+            self.class_sum_sq_[idx] += Xg.T @ Xg
+
+        self._update_from_partial()
+        return self
+
+    def _update_from_partial(self):
+        n_samples = np.sum(self.class_count_)
+        self.priors_ = (
+            np.asarray(self.priors)
+            if self.priors is not None
+            else self.class_count_ / n_samples
+        )
+
+        self.means_ = np.zeros_like(self.class_sum_)
+        for idx, n_k in enumerate(self.class_count_):
+            if n_k:
+                self.means_[idx] = self.class_sum_[idx] / n_k
+        self.xbar_ = np.dot(self.priors_, self.means_)
+
+        n_features = self.class_sum_.shape[1]
+        Sw = np.zeros((n_features, n_features))
+        St = np.zeros((n_features, n_features))
+        global_sum_sq = np.sum(self.class_sum_sq_, axis=0)
+        global_mean = np.sum(self.class_sum_, axis=0) / n_samples
+        St = global_sum_sq / n_samples - np.outer(global_mean, global_mean)
+
+        for idx in range(len(self.classes_)):
+            if self.class_count_[idx]:
+                mean_k = self.means_[idx]
+                cov_k = self.class_sum_sq_[idx] / self.class_count_[idx] - np.outer(
+                    mean_k, mean_k
+                )
+                Sw += self.priors_[idx] * cov_k
+
+        self.covariance_ = Sw
+        Sb = St - Sw
+
+        if self.solver in ["svd", "eigen"]:
+            evals, evecs = linalg.eigh(Sb, Sw)
+            order = np.argsort(evals)[::-1]
+            evals = evals[order]
+            evecs = evecs[:, order]
+            if self.n_components is None:
+                self._max_components = min(len(self.classes_) - 1, n_features)
+            else:
+                if self.n_components > min(len(self.classes_) - 1, n_features):
+                    raise ValueError(
+                        "n_components cannot be larger than "
+                        "min(n_features, n_classes - 1)."
+                    )
+                self._max_components = self.n_components
+            self.scalings_ = evecs
+            self.explained_variance_ratio_ = (evals / np.sum(evals))[
+                : self._max_components
+            ]
+            if self.solver == "svd":
+                coef = (self.means_ - self.xbar_) @ evecs
+                self.intercept_ = -0.5 * np.sum(coef**2, axis=1) + np.log(self.priors_)
+                self.coef_ = coef @ evecs.T
+                self.intercept_ -= self.xbar_ @ self.coef_.T
+            else:
+                self.coef_ = self.means_ @ evecs @ evecs.T
+                self.intercept_ = -0.5 * np.diag(self.means_ @ self.coef_.T) + np.log(
+                    self.priors_
+                )
+        elif self.solver == "lsqr":
+            self._max_components = min(len(self.classes_) - 1, n_features)
+            self.coef_ = linalg.lstsq(self.covariance_, self.means_.T)[0].T
+            self.intercept_ = -0.5 * np.diag(self.means_ @ self.coef_.T) + np.log(
+                self.priors_
+            )
+        else:
+            raise ValueError(f"Unknown solver {self.solver}")
+
+        if len(self.classes_) == 2:
+            self.coef_ = self.coef_[1:2] - self.coef_[0:1]
+            self.intercept_ = self.intercept_[1:2] - self.intercept_[0:1]
+        self._n_features_out = self._max_components
 
 
 class QuadraticDiscriminantAnalysis(
