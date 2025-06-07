@@ -946,9 +946,11 @@ class LinearDiscriminantAnalysis(
         Sb = St - Sw
 
         if self.solver in ["svd", "eigen"]:
-            # Add regularization to Sw for numerical stability
-            Sw_reg = Sw + np.eye(Sw.shape[0]) * 1e-8
-            evals, evecs = linalg.eigh(Sb, Sw_reg)
+            if self.solver in ['lsqr', 'eigen']:
+                Sw_reg = Sw + np.eye(Sw.shape[0]) * 1e-8
+                evals, evecs = linalg.eigh(Sb, Sw_reg)
+            else:  # 'svd' solver
+                evals, evecs = linalg.eigh(Sb, Sw)
             order = np.argsort(evals)[::-1]
             evals = evals[order]
             evecs = evecs[:, order]

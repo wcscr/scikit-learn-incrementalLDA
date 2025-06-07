@@ -1,0 +1,136 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.18, pytest-8.3.5, pluggy-1.5.0
+rootdir: /tmp
+plugins: anyio-4.9.0, cov-6.1.1, json-report-1.5.0, metadata-3.1.1
+collected 51 items
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py . [  1%]
+.FF                                                                      [  7%]
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_discriminant_analysis.py . [  9%]
+..............................................                           [100%]
+
+=================================== FAILURES ===================================
+_____________________________ test_partial_fit_svd _____________________________
+
+    def test_partial_fit_svd():
+>       _check_partial_fit_equivalence("svd")
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py:66:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+solver = 'svd'
+
+    def _check_partial_fit_equivalence(solver):
+        clf = LinearDiscriminantAnalysis(solver=solver, store_covariance=True).fit(X, y)
+        clf_pf = LinearDiscriminantAnalysis(solver=solver, store_covariance=True)
+        clf_pf.partial_fit(X[:5], y[:5], classes=np.unique(y))
+        clf_pf.partial_fit(X[5:], y[5:])
+
+        err_msg_predict = f"predict mismatch for solver {solver}"
+        assert_allclose(clf.predict(X), clf_pf.predict(X), err_msg=err_msg_predict)
+
+        err_msg_means = f"means_ mismatch for solver {solver}"
+        assert_allclose(clf.means_, clf_pf.means_, rtol=1e-5, atol=1e-5, err_msg=err_msg_means)
+
+        err_msg_coef = f"coef_ mismatch for solver {solver}"
+>       assert_allclose(clf.coef_, clf_pf.coef_, rtol=1e-5, atol=1e-5, err_msg=err_msg_coef)
+E       AssertionError:
+E       Not equal to tolerance rtol=1e-05, atol=1e-05
+E       coef_ mismatch for solver svd
+E       Mismatched elements: 2 / 2 (100%)
+E       Max absolute difference among violations: 1.18181807
+E       Max relative difference among violations: 0.22222221
+E        ACTUAL: array([[4.136364, 3.977273]])
+E        DESIRED: array([[5.318182, 5.113636]])
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py:26: AssertionError
+________________________ test_partial_fit_large_batches ________________________
+
+    def test_partial_fit_large_batches():
+        X_large, y_large = make_classification(
+            n_samples=200,
+            n_features=2,
+            n_informative=2,
+            n_redundant=0,
+            n_repeated=0,
+            n_classes=2,
+            n_clusters_per_class=1,
+            random_state=0,
+        )
+        classes = np.unique(y_large)
+
+        for solver in ["svd", "eigen", "lsqr"]:
+            clf = LinearDiscriminantAnalysis(solver=solver, store_covariance=True).fit(
+                X_large, y_large
+            )
+
+            clf_pf_once = LinearDiscriminantAnalysis(solver=solver, store_covariance=True)
+            clf_pf_once.partial_fit(X_large, y_large, classes=classes)
+
+            clf_pf_batches = LinearDiscriminantAnalysis(solver=solver, store_covariance=True)
+            first = True
+            for Xi, yi in zip(np.array_split(X_large, 4), np.array_split(y_large, 4)):
+                clf_pf_batches.partial_fit(Xi, yi, classes=classes if first else None)
+                first = False
+
+            # Compare clf_pf_once to clf
+            err_msg_prefix_once = f"clf_pf_once vs clf ({solver}): "
+            assert_allclose(
+                clf.predict(X_large),
+                clf_pf_once.predict(X_large),
+                err_msg=err_msg_prefix_once + "predict mismatch",
+            )
+            assert_allclose(
+                clf.means_,
+                clf_pf_once.means_,
+                rtol=1e-5,
+                atol=1e-5,
+                err_msg=err_msg_prefix_once + "means_ mismatch",
+            )
+>           assert_allclose(
+                clf.coef_,
+                clf_pf_once.coef_,
+                rtol=1e-5,
+                atol=1e-5,
+                err_msg=err_msg_prefix_once + "coef_ mismatch",
+            )
+E           AssertionError:
+E           Not equal to tolerance rtol=1e-05, atol=1e-05
+E           clf_pf_once vs clf (svd): coef_ mismatch
+E           Mismatched elements: 2 / 2 (100%)
+E           Max absolute difference among violations: 0.03767609
+E           Max relative difference among violations: 0.01000004
+E            ACTUAL: array([[3.72994 , 0.078869]])
+E            DESIRED: array([[3.767616, 0.079665]])
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py:110: AssertionError
+=============================== warnings summary ===============================
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py::test_partial_fit_eigen
+  /tmp/sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/discriminant_analysis.py:982: RuntimeWarning: divide by zero encountered in log
+    self.intercept_ = -0.5 * np.diag(self.means_ @ self.coef_.T) + np.log(
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py::test_partial_fit_lsqr
+  /tmp/sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/discriminant_analysis.py:988: RuntimeWarning: divide by zero encountered in log
+    self.intercept_ = -0.5 * np.diag(self.means_ @ self.coef_.T) + np.log(
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py::test_partial_fit_svd
+  /tmp/sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/discriminant_analysis.py:977: RuntimeWarning: divide by zero encountered in log
+    self.intercept_ = -0.5 * np.sum(coef**2, axis=1) + np.log(self.priors_)
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_discriminant_analysis.py::test_qda_regularization
+  /tmp/sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/discriminant_analysis.py:1213: RuntimeWarning: divide by zero encountered in power
+    X2 = np.dot(Xm, R * (S ** (-0.5)))
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_discriminant_analysis.py::test_qda_regularization
+  /tmp/sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/discriminant_analysis.py:1213: RuntimeWarning: invalid value encountered in multiply
+    X2 = np.dot(Xm, R * (S ** (-0.5)))
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_discriminant_analysis.py::test_qda_regularization
+  /tmp/sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/discriminant_analysis.py:1216: RuntimeWarning: divide by zero encountered in log
+    u = np.asarray([np.sum(np.log(s)) for s in self.scalings_])
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py::test_partial_fit_svd
+FAILED sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py::test_partial_fit_large_batches
+=================== 2 failed, 49 passed, 6 warnings in 2.00s ===================

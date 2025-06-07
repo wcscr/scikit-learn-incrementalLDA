@@ -1,0 +1,74 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.18, pytest-8.3.5, pluggy-1.5.0
+rootdir: /tmp
+plugins: anyio-4.9.0, cov-6.1.1, json-report-1.5.0, metadata-3.1.1
+collected 51 items
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py . [  1%]
+.FF                                                                      [  7%]
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_discriminant_analysis.py . [  9%]
+..............................................                           [100%]
+
+=================================== FAILURES ===================================
+_____________________________ test_partial_fit_svd _____________________________
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py:72: in test_partial_fit_svd
+    _check_partial_fit_equivalence("svd")
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py:48: in _check_partial_fit_equivalence
+    assert_allclose(
+E   AssertionError:
+E   Not equal to tolerance rtol=1e-05, atol=1e-05
+E   predict_proba mismatch for solver svd
+E   Mismatched elements: 8 / 18 (44.4%)
+E   Max absolute difference among violations: 0.03606104
+E   Max relative difference among violations: 18.10547412
+E    ACTUAL: array([[9.194211e-01, 8.057892e-02],
+E          [1.000000e+00, 7.857637e-09],
+E          [9.999996e-01, 4.193719e-07],...
+E    DESIRED: array([[9.554821e-01, 4.451787e-02],
+E          [1.000000e+00, 4.049019e-11],
+E          [1.000000e+00, 6.732461e-09],...
+________________________ test_partial_fit_large_batches ________________________
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py:143: in test_partial_fit_large_batches
+    assert_allclose(
+E   AssertionError:
+E   Not equal to tolerance rtol=1e-05, atol=1e-05
+E   clf_pf_once vs clf (svd): predict_proba mismatch
+E   Mismatched elements: 384 / 400 (96%)
+E   Max absolute difference among violations: 0.00227898
+E   Max relative difference among violations: 0.09568346
+E    ACTUAL: array([[1.652740e-02, 9.834726e-01],
+E          [8.185023e-01, 1.814977e-01],
+E          [2.647431e-02, 9.735257e-01],...
+E    DESIRED: array([[1.587290e-02, 9.841271e-01],
+E          [8.207813e-01, 1.792187e-01],
+E          [2.555690e-02, 9.744431e-01],...
+=============================== warnings summary ===============================
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py::test_partial_fit_eigen
+  /tmp/sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/discriminant_analysis.py:982: RuntimeWarning: divide by zero encountered in log
+    self.intercept_ = -0.5 * np.diag(self.means_ @ self.coef_.T) + np.log(
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py::test_partial_fit_lsqr
+  /tmp/sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/discriminant_analysis.py:988: RuntimeWarning: divide by zero encountered in log
+    self.intercept_ = -0.5 * np.diag(self.means_ @ self.coef_.T) + np.log(
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py::test_partial_fit_svd
+  /tmp/sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/discriminant_analysis.py:977: RuntimeWarning: divide by zero encountered in log
+    self.intercept_ = -0.5 * np.sum(coef**2, axis=1) + np.log(self.priors_)
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_discriminant_analysis.py::test_qda_regularization
+  /tmp/sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/discriminant_analysis.py:1213: RuntimeWarning: divide by zero encountered in power
+    X2 = np.dot(Xm, R * (S ** (-0.5)))
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_discriminant_analysis.py::test_qda_regularization
+  /tmp/sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/discriminant_analysis.py:1213: RuntimeWarning: invalid value encountered in multiply
+    X2 = np.dot(Xm, R * (S ** (-0.5)))
+
+sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_discriminant_analysis.py::test_qda_regularization
+  /tmp/sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/discriminant_analysis.py:1216: RuntimeWarning: divide by zero encountered in log
+    u = np.asarray([np.sum(np.log(s)) for s in self.scalings_])
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py::test_partial_fit_svd
+FAILED sklearn_install_test/usr/local/lib/python3/dist-packages/sklearn/tests/test_lda_partial_fit.py::test_partial_fit_large_batches
+=================== 2 failed, 49 passed, 6 warnings in 1.83s ===================
