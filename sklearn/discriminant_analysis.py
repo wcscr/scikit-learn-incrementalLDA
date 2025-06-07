@@ -5,6 +5,7 @@
 
 import warnings
 from numbers import Integral, Real
+from collections import defaultdict
 
 import numpy as np
 import scipy.linalg
@@ -20,6 +21,7 @@ from .base import (
 from .covariance import empirical_covariance, ledoit_wolf, shrunk_covariance
 from .linear_model._base import LinearClassifierMixin
 from .preprocessing import StandardScaler
+from .decomposition import IncrementalPCA
 from .utils._array_api import _expit, device, get_namespace, size
 from .utils._param_validation import HasMethods, Interval, StrOptions
 from .utils.extmath import softmax
@@ -440,6 +442,13 @@ class LinearDiscriminantAnalysis(
         self.store_covariance = store_covariance  # used only in svd solver
         self.tol = tol  # used only in svd solver
         self.covariance_estimator = covariance_estimator
+
+        # attributes used for incremental svd solver
+        self._ipca = None
+        self._mu_total = None
+        self._mu_class = {}
+        self._class_counts = defaultdict(int)
+        self._total_count = 0
 
     def _solve_lstsq(self, X, y, shrinkage, covariance_estimator):
         """Least squares solver.
@@ -862,6 +871,11 @@ class LinearDiscriminantAnalysis(
         tags.array_api_support = True
         return tags
 
+    # --- helper used for incremental svd solver ---
+    def _whiten(self, X):
+        Z = self._ipca.transform(X)
+        return Z / np.sqrt(self._ipca.explained_variance_ + 1e-12)
+
     @_fit_context(prefer_skip_nested_validation=True)
     def partial_fit(self, X, y, classes=None):
         """Incremental fit on a batch of samples.
@@ -895,11 +909,27 @@ class LinearDiscriminantAnalysis(
             self.class_sum_ = np.zeros((n_classes, n_features))
             self.class_sum_sq_ = np.zeros((n_classes, n_features, n_features))
 
+            if self.solver == "svd":
+                n_components_ipca = min(X.shape[0], n_features)
+                self._ipca = IncrementalPCA(n_components=n_components_ipca)
+                self._mu_total = np.zeros(n_features)
+                self._mu_class = {}
+                self._class_counts = defaultdict(int)
+                self._total_count = 0
+
         if X.shape[1] != self.class_sum_.shape[1]:
             raise ValueError(
                 "Number of features %d does not match previous data %d."
                 % (X.shape[1], self.class_sum_.shape[1])
             )
+
+        if self.solver == "svd":
+            self._ipca.partial_fit(X)
+            batch_mean = X.mean(axis=0)
+            n_prev = self._total_count
+            n_new = len(X)
+            self._mu_total += (batch_mean - self._mu_total) * n_new / (n_prev + n_new)
+            self._total_count += n_new
 
         for idx, group in enumerate(self.classes_):
             mask = y == group
@@ -909,6 +939,16 @@ class LinearDiscriminantAnalysis(
             self.class_count_[idx] += Xg.shape[0]
             self.class_sum_[idx] += np.sum(Xg, axis=0)
             self.class_sum_sq_[idx] += Xg.T @ Xg
+
+            if self.solver == "svd":
+                n_prev_cls = self._class_counts[group]
+                n_new_cls = Xg.shape[0]
+                x_bar = Xg.mean(axis=0)
+                mu_prev = self._mu_class.get(group, np.zeros(X.shape[1]))
+                self._mu_class[group] = mu_prev + (x_bar - mu_prev) * n_new_cls / (
+                    n_prev_cls + n_new_cls
+                )
+                self._class_counts[group] += n_new_cls
 
         self._update_from_partial()
         return self
@@ -961,87 +1001,36 @@ class LinearDiscriminantAnalysis(
             n_samples_total = np.sum(self.class_count_)
 
             if n_samples_total == 0 or n_classes == 0:
-                # Or handle as appropriate, e.g., set default values or raise error
                 self.coef_ = np.zeros((n_classes if n_classes > 0 else 1, n_features))
-                self.intercept_ = np.log(np.maximum(self.priors_, 1e-12)) if hasattr(self, 'priors_') and self.priors_ is not None and self.priors_.size > 0 else np.zeros(n_classes if n_classes > 0 else 1)
+                self.intercept_ = (
+                    np.log(np.maximum(self.priors_, 1e-12))
+                    if hasattr(self, "priors_") and self.priors_ is not None and self.priors_.size > 0
+                    else np.zeros(n_classes if n_classes > 0 else 1)
+                )
                 self.scalings_ = np.empty((n_features, 0))
                 self.explained_variance_ratio_ = np.empty((0,))
-                # Potentially set self.xbar_ if not already set, though it should be.
-                if not hasattr(self, 'xbar_'):
+                if not hasattr(self, "xbar_"):
                     self.xbar_ = np.zeros(n_features)
                 return
 
+            k_means = self._whiten(self.means_)
+            k_mu_total = self._whiten(self.xbar_.reshape(1, -1)).ravel()
+            counts = self.class_count_
+            B = (k_means - k_mu_total) * np.sqrt(counts)[:, None]
+            _, S_lda, Vt_lda = linalg.svd(B, full_matrices=False)
 
-            Sw_pooled_unscaled = np.zeros((n_features, n_features))
-            for idx in range(n_classes):
-                if self.class_count_[idx] > 0:
-                    mean_k = self.means_[idx]
-                    sum_k = self.class_sum_[idx]
-                    sum_sq_k = self.class_sum_sq_[idx]
-                    nk = self.class_count_[idx]
-                    # Sw_k = sum_sq_k - nk * outer(mean_k, mean_k)
-                    # Corrected calculation for Sw_pooled_unscaled based on Xc.T @ Xc
-                    # Xc_k = X_k - mean_k
-                    # Xc_k.T @ Xc_k = (X_k - mean_k).T @ (X_k - mean_k)
-                    # = X_k.T @ X_k - X_k.T @ mean_k - mean_k.T @ X_k + nk * mean_k.T @ mean_k
-                    # = sum_sq_k - sum_k.T @ mean_k - mean_k.T @ sum_k + nk * mean_k.T @ mean_k
-                    Sw_pooled_unscaled += sum_sq_k - np.outer(sum_k, mean_k) - np.outer(mean_k, sum_k) + nk * np.outer(mean_k, mean_k)
+            m = self._max_components
+            whiten_transform = self._ipca.components_.T / np.sqrt(self._ipca.explained_variance_ + 1e-12)
+            self.scalings_ = whiten_transform @ Vt_lda.T[:, :m]
 
-            if n_samples_total - n_classes <= 0:
-                rank = 0
-                self.scalings_step1 = np.empty((n_features, 0))
-            else:
-                var_Xc = np.diag(Sw_pooled_unscaled) / (n_samples_total - n_classes)
-                std_Xc = np.sqrt(np.maximum(var_Xc, 1e-12))
-                std_Xc[std_Xc == 0] = 1.0
-                D_std_inv = np.diag(1.0 / std_Xc)
-                fac_svd = 1.0 / (n_samples_total - n_classes)
-                Sw_transformed = fac_svd * (D_std_inv @ Sw_pooled_unscaled @ D_std_inv)
-
-                # Use eigh for symmetric matrices
-                evals_svd, evecs_svd = linalg.eigh(Sw_transformed)
-                idx_sort = np.argsort(evals_svd)[::-1]
-                S_squared = evals_svd[idx_sort]
-                evecs_svd_sorted = evecs_svd[:, idx_sort]
-
-                S_svd = np.sqrt(np.maximum(S_squared, 1e-12))
-                Vt_svd = evecs_svd_sorted.T # Eigenvectors from eigh are columns, so V.T is evecs_svd_sorted.T
-
-                rank = np.sum(S_svd > self.tol)
-                if rank == 0:
-                    self.scalings_step1 = np.empty((n_features, 0))
-                else:
-                    # U_svd @ diag(S_svd) @ Vt_svd = Sw_transformed
-                    # scalings_step1 should be D_std_inv @ V @ diag(1/S)
-                    self.scalings_step1 = (D_std_inv @ Vt_svd.T[:, :rank]) / S_svd[:rank]
-
-            if self.scalings_step1.shape[1] == 0:
+            if S_lda.size == 0:
                 self.explained_variance_ratio_ = np.empty((0,))
-                self.scalings_ = np.empty((n_features, 0))
             else:
-                fac_lda = 1.0 if n_classes == 1 else 1.0 / (n_classes - 1)
-                # Ensure priors are positive and sum to 1, handle potential division by zero for n_samples_total if it's zero (already checked)
-                safe_priors = np.maximum(self.priors_, 1e-12) / np.sum(np.maximum(self.priors_, 1e-12))
-
-                # Use n_samples_total which is sum of class_count_
-                sqrt_priors_fac = np.sqrt((n_samples_total * safe_priors[:, np.newaxis]) * fac_lda)
-                X_lda = (sqrt_priors_fac * (self.means_ - self.xbar_)) @ self.scalings_step1
-
-                _, S_lda, Vt_lda = linalg.svd(X_lda, full_matrices=False)
-
-                sum_S_lda_sq = np.sum(S_lda**2)
-                if sum_S_lda_sq < 1e-10:
-                    self.explained_variance_ratio_ = np.zeros_like(S_lda**2)[:self._max_components]
+                sum_S_sq = np.sum(S_lda**2)
+                if sum_S_sq < 1e-10:
+                    self.explained_variance_ratio_ = np.zeros_like(S_lda**2)[:m]
                 else:
-                    self.explained_variance_ratio_ = (S_lda**2 / sum_S_lda_sq)[:self._max_components]
-
-                tol_lda = self.tol * (S_lda[0] if len(S_lda) > 0 else self.tol)
-                rank_lda = np.sum(S_lda > tol_lda)
-
-                if rank_lda == 0:
-                    self.scalings_ = np.empty((n_features, 0))
-                else:
-                    self.scalings_ = self.scalings_step1 @ Vt_lda.T[:, :rank_lda]
+                    self.explained_variance_ratio_ = (S_lda**2 / sum_S_sq)[:m]
 
             if self.scalings_.shape[1] == 0:
                 self.coef_ = np.zeros((n_classes, n_features))
@@ -1051,21 +1040,7 @@ class LinearDiscriminantAnalysis(
                 coef = (self.means_ - self.xbar_) @ self.scalings_
                 self.intercept_ = -0.5 * np.sum(coef**2, axis=1) + np.log(np.maximum(self.priors_, 1e-12))
                 self.coef_ = coef @ self.scalings_.T
-                # The intercept also needs the xbar term if coef_ is not directly applied to centered X
-                # self.intercept_ -= self.xbar_ @ self.coef_.T # This line is in _solve_svd, let's keep consistency
-                                                            # In LDA, decision rule is based on (X-mu_k).T Sigma^-1 (X-mu_k)
-                                                            # coef_ becomes (mu_k - xbar_).T Sigma^-1
-                                                            # intercept_ becomes -0.5 mu_k.T Sigma^-1 mu_k + log(prior_k) - xbar_.T Sigma^-1 mu_k
-                                                            # The current self.coef_ is (means_ - xbar_) @ scalings_ @ scalings_.T
-                                                            # which is (means_ - xbar_) @ Sigma_inv_approx
-                                                            # So, if X is used directly, X @ coef_.T + intercept_
-                                                            # intercept_ = -0.5 * sum(((means_ - xbar_) @ scalings_)**2, axis=1) + log(priors) - xbar_ @ ((means_ - xbar_) @ scalings_ @ scalings_.T).T
-                                                            # This seems more complex. The original _solve_svd is:
-                                                            # self.coef_ = coef @ self.scalings_.T
-                                                            # self.intercept_ -= self.xbar_ @ self.coef_.T
-                                                            # Let's stick to this.
                 self.intercept_ -= self.xbar_ @ self.coef_.T
-
 
         elif self.solver == "eigen":
             # Add regularization to Sw for numerical stability
