@@ -552,9 +552,18 @@ class LinearDiscriminantAnalysis(
         Sb = St - Sw  # between scatter
 
         evals, evecs = linalg.eigh(Sb, Sw)
-        self.explained_variance_ratio_ = np.sort(evals / np.sum(evals))[::-1][
-            : self._max_components
-        ]
+        # Safeguard explained_variance_ratio_ calculation
+        # sort evals in descending order
+        sorted_evals = np.sort(evals)[::-1]
+        sum_evals = np.sum(sorted_evals)
+        if sum_evals < 1e-10:
+            self.explained_variance_ratio_ = np.zeros_like(sorted_evals)[
+                : self._max_components
+            ]
+        else:
+            self.explained_variance_ratio_ = (sorted_evals / sum_evals)[
+                : self._max_components
+            ]
         evecs = evecs[:, np.argsort(evals)[::-1]]  # sort eigenvectors
 
         self.scalings_ = evecs
@@ -626,9 +635,22 @@ class LinearDiscriminantAnalysis(
         if self._max_components == 0:
             self.explained_variance_ratio_ = xp.empty((0,), dtype=S.dtype)
         else:
-            self.explained_variance_ratio_ = (S**2 / xp.sum(S**2))[
-                : self._max_components
-            ]
+            # Safeguard explained_variance_ratio_ calculation
+            sum_S_sq = xp.sum(S**2)
+            if sum_S_sq < 1e-10:
+                # Create an array of zeros with the same shape and type as S would have
+                # if S was not empty, then take the slice.
+                # This handles the case where S might be empty or all zeros.
+                if size(S) > 0:
+                    self.explained_variance_ratio_ = xp.zeros_like(S**2)[
+                        : self._max_components
+                    ]
+                else:  # S is empty
+                    self.explained_variance_ratio_ = xp.empty((0,), dtype=S.dtype)
+            else:
+                self.explained_variance_ratio_ = (S**2 / sum_S_sq)[
+                    : self._max_components
+                ]
 
         rank = xp.sum(xp.astype(S > self.tol * S[0], xp.int32))
         self.scalings_ = scalings @ Vt.T[:, :rank]
@@ -924,7 +946,9 @@ class LinearDiscriminantAnalysis(
         Sb = St - Sw
 
         if self.solver in ["svd", "eigen"]:
-            evals, evecs = linalg.eigh(Sb, Sw)
+            # Add regularization to Sw for numerical stability
+            Sw_reg = Sw + np.eye(Sw.shape[0]) * 1e-8
+            evals, evecs = linalg.eigh(Sb, Sw_reg)
             order = np.argsort(evals)[::-1]
             evals = evals[order]
             evecs = evecs[:, order]
@@ -938,9 +962,16 @@ class LinearDiscriminantAnalysis(
                     )
                 self._max_components = self.n_components
             self.scalings_ = evecs
-            self.explained_variance_ratio_ = (evals / np.sum(evals))[
-                : self._max_components
-            ]
+            # Safeguard explained_variance_ratio_ calculation
+            sum_evals = np.sum(evals)
+            if sum_evals < 1e-10:
+                self.explained_variance_ratio_ = np.zeros_like(evals)[
+                    : self._max_components
+                ]
+            else:
+                self.explained_variance_ratio_ = (evals / sum_evals)[
+                    : self._max_components
+                ]
             if self.solver == "svd":
                 coef = (self.means_ - self.xbar_) @ evecs
                 self.intercept_ = -0.5 * np.sum(coef**2, axis=1) + np.log(self.priors_)
