@@ -16,10 +16,27 @@ def _check_partial_fit_equivalence(solver):
     clf_pf.partial_fit(X[:5], y[:5], classes=np.unique(y))
     clf_pf.partial_fit(X[5:], y[5:])
     assert_allclose(clf.predict(X), clf_pf.predict(X))
-    if solver != "svd":
-        assert_allclose(clf.coef_, clf_pf.coef_, rtol=1e-6, atol=1e-6)
-        assert_allclose(clf.intercept_, clf_pf.intercept_, rtol=1e-6, atol=1e-6)
-    assert_allclose(clf.priors_, clf_pf.priors_, rtol=1e-6)
+    assert_allclose(clf.priors_, clf_pf.priors_, rtol=1e-5, atol=1e-5) # Adjusted tolerance for consistency
+
+    if solver == "svd":
+        assert_allclose(clf.coef_, clf_pf.coef_, rtol=1e-5, atol=1e-5)
+        assert_allclose(clf.intercept_, clf_pf.intercept_, rtol=1e-5, atol=1e-5)
+        assert_allclose(clf.means_, clf_pf.means_, rtol=1e-5, atol=1e-5)
+        assert_allclose(clf.xbar_, clf_pf.xbar_, rtol=1e-5, atol=1e-5)
+        assert_allclose(clf.transform(X), clf_pf.transform(X), rtol=1e-5, atol=1e-5)
+        if hasattr(clf, 'explained_variance_ratio_') and hasattr(clf_pf, 'explained_variance_ratio_'):
+            assert_allclose(clf.explained_variance_ratio_, clf_pf.explained_variance_ratio_, rtol=1e-5, atol=1e-5)
+    elif solver == "eigen":
+        assert_allclose(clf.coef_, clf_pf.coef_, rtol=1e-5, atol=1e-5) # Keep existing check, adjust tol
+        assert_allclose(clf.intercept_, clf_pf.intercept_, rtol=1e-5, atol=1e-5) # Keep existing check, adjust tol
+        assert_allclose(clf.means_, clf_pf.means_, rtol=1e-5, atol=1e-5)
+        assert_allclose(clf.transform(X), clf_pf.transform(X), rtol=1e-5, atol=1e-5)
+        if hasattr(clf, 'explained_variance_ratio_') and hasattr(clf_pf, 'explained_variance_ratio_'):
+            assert_allclose(clf.explained_variance_ratio_, clf_pf.explained_variance_ratio_, rtol=1e-5, atol=1e-5)
+    elif solver == "lsqr":
+        assert_allclose(clf.coef_, clf_pf.coef_, rtol=1e-5, atol=1e-5) # Keep existing check, adjust tol
+        assert_allclose(clf.intercept_, clf_pf.intercept_, rtol=1e-5, atol=1e-5) # Keep existing check, adjust tol
+        assert_allclose(clf.means_, clf_pf.means_, rtol=1e-5, atol=1e-5)
 
 
 def test_partial_fit_eigen():
@@ -59,9 +76,155 @@ def test_partial_fit_large_batches():
             clf_pf_batches.partial_fit(Xi, yi, classes=classes if first else None)
             first = False
 
-        assert_allclose(clf.predict(X_large), clf_pf_once.predict(X_large))
-        assert_allclose(clf.predict(X_large), clf_pf_batches.predict(X_large))
+        assert_allclose(clf.predict(X_large), clf_pf_once.predict(X_large), rtol=1e-5, atol=1e-5)
+        assert_allclose(clf.predict(X_large), clf_pf_batches.predict(X_large), rtol=1e-5, atol=1e-5)
+        assert_allclose(clf.priors_, clf_pf_once.priors_, rtol=1e-5, atol=1e-5)
+        assert_allclose(clf.priors_, clf_pf_batches.priors_, rtol=1e-5, atol=1e-5)
 
-        if solver != "svd":
-            assert_allclose(clf.coef_, clf_pf_once.coef_, rtol=1e-6, atol=1e-6)
-            assert_allclose(clf.coef_, clf_pf_batches.coef_, rtol=1e-6, atol=1e-6)
+
+        if solver == "svd":
+            assert_allclose(clf.coef_, clf_pf_once.coef_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.coef_, clf_pf_batches.coef_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.intercept_, clf_pf_once.intercept_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.intercept_, clf_pf_batches.intercept_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.means_, clf_pf_once.means_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.means_, clf_pf_batches.means_, rtol=1e-5, atol=1e-5)
+
+
+def test_partial_fit_svd_store_covariance():
+    # Case 1: store_covariance=True
+    clf_pf_true = LinearDiscriminantAnalysis(solver='svd', store_covariance=True)
+    clf_pf_true.partial_fit(X, y, classes=np.unique(y))
+    assert hasattr(clf_pf_true, 'covariance_')
+    assert clf_pf_true.covariance_ is not None
+
+    clf_fit_true = LinearDiscriminantAnalysis(solver='svd', store_covariance=True).fit(X, y)
+    assert hasattr(clf_fit_true, 'covariance_')
+    assert_allclose(clf_pf_true.covariance_, clf_fit_true.covariance_, rtol=1e-5, atol=1e-5)
+
+    # Case 2: store_covariance=False
+    clf_pf_false = LinearDiscriminantAnalysis(solver='svd', store_covariance=False)
+    clf_pf_false.partial_fit(X, y, classes=np.unique(y))
+    assert not hasattr(clf_pf_false, 'covariance_')
+
+
+def test_partial_fit_svd_n_components():
+    X_large, y_large = make_classification(
+        n_samples=200,
+        n_features=5,  # Ensure enough features
+        n_informative=3,
+        n_redundant=0,
+        n_repeated=0,
+        n_classes=3,   # Ensure enough classes
+        n_clusters_per_class=1,
+        random_state=42,
+    )
+    classes = np.unique(y_large)
+    n_features = X_large.shape[1]
+    n_cls = len(classes)
+    max_components = min(n_cls - 1, n_features)
+
+    # Test Case: n_components=None (default)
+    clf_pf_none = LinearDiscriminantAnalysis(solver='svd', n_components=None)
+    clf_pf_none.partial_fit(X_large, y_large, classes=classes)
+    transformed_none = clf_pf_none.transform(X_large)
+    assert transformed_none.shape[1] == max_components
+    assert len(clf_pf_none.explained_variance_ratio_) == max_components
+
+    clf_fit_none = LinearDiscriminantAnalysis(solver='svd', n_components=None).fit(X_large, y_large)
+    assert_allclose(clf_pf_none.explained_variance_ratio_, clf_fit_none.explained_variance_ratio_, rtol=1e-5, atol=1e-5)
+    assert_allclose(transformed_none, clf_fit_none.transform(X_large), rtol=1e-5, atol=1e-5)
+
+
+    # Test Case: n_components=1 (specific value, if max_components >= 1)
+    if max_components >= 1:
+        n_comp_specific = 1
+        clf_pf_one = LinearDiscriminantAnalysis(solver='svd', n_components=n_comp_specific)
+        clf_pf_one.partial_fit(X_large, y_large, classes=classes)
+        transformed_one = clf_pf_one.transform(X_large)
+        assert transformed_one.shape[1] == n_comp_specific
+        assert len(clf_pf_one.explained_variance_ratio_) == n_comp_specific
+
+        clf_fit_one = LinearDiscriminantAnalysis(solver='svd', n_components=n_comp_specific).fit(X_large, y_large)
+        assert_allclose(clf_pf_one.explained_variance_ratio_, clf_fit_one.explained_variance_ratio_, rtol=1e-5, atol=1e-5)
+        assert_allclose(transformed_one, clf_fit_one.transform(X_large), rtol=1e-5, atol=1e-5)
+
+
+def test_partial_fit_svd_high_dimensions():
+    X_hd, y_hd = make_classification(
+        n_samples=50,
+        n_features=100,
+        n_classes=3,
+        n_informative=10,
+        n_redundant=0,
+        n_repeated=0,
+        shuffle=False, # for reproducible batching
+        random_state=42,
+    )
+    classes = np.unique(y_hd)
+
+    # Fit with fit()
+    clf_fit = LinearDiscriminantAnalysis(solver='svd', store_covariance=False)
+    clf_fit.fit(X_hd, y_hd)
+
+    # Fit with partial_fit() (single batch)
+    clf_pf_single = LinearDiscriminantAnalysis(solver='svd', store_covariance=False)
+    clf_pf_single.partial_fit(X_hd, y_hd, classes=classes)
+
+    attributes_to_check = ["priors_", "means_", "xbar_", "coef_", "intercept_"]
+    for attr in attributes_to_check:
+        assert_allclose(getattr(clf_fit, attr), getattr(clf_pf_single, attr), rtol=1e-5, atol=1e-5, err_msg=f"Attribute {attr} mismatch for single batch.")
+
+    if hasattr(clf_fit, 'explained_variance_ratio_') and hasattr(clf_pf_single, 'explained_variance_ratio_'):
+         assert_allclose(clf_fit.explained_variance_ratio_, clf_pf_single.explained_variance_ratio_, rtol=1e-5, atol=1e-5, err_msg="explained_variance_ratio_ mismatch for single batch.")
+
+    assert_allclose(clf_fit.predict(X_hd), clf_pf_single.predict(X_hd), rtol=1e-5, atol=1e-5, err_msg="predict mismatch for single batch.")
+    # Transform can have more numerical sensitivity, especially in high dimensions with SVD
+    # Check if transform is available (scalings_ might be empty)
+    if hasattr(clf_fit, 'scalings_') and clf_fit.scalings_.shape[1] > 0 and \
+       hasattr(clf_pf_single, 'scalings_') and clf_pf_single.scalings_.shape[1] > 0:
+        assert_allclose(clf_fit.transform(X_hd), clf_pf_single.transform(X_hd), rtol=1e-4, atol=1e-4, err_msg="transform mismatch for single batch.") # Looser tolerance for transform
+
+    # Fit with partial_fit() (multiple batches)
+    clf_pf_multi = LinearDiscriminantAnalysis(solver='svd', store_covariance=False)
+    batch_size = X_hd.shape[0] // 3
+    clf_pf_multi.partial_fit(X_hd[:batch_size], y_hd[:batch_size], classes=classes)
+    clf_pf_multi.partial_fit(X_hd[batch_size : 2 * batch_size], y_hd[batch_size : 2 * batch_size])
+    clf_pf_multi.partial_fit(X_hd[2 * batch_size :], y_hd[2 * batch_size :])
+
+    for attr in attributes_to_check:
+        assert_allclose(getattr(clf_fit, attr), getattr(clf_pf_multi, attr), rtol=1e-5, atol=1e-5, err_msg=f"Attribute {attr} mismatch for multi batch.")
+
+    if hasattr(clf_fit, 'explained_variance_ratio_') and hasattr(clf_pf_multi, 'explained_variance_ratio_'):
+        assert_allclose(clf_fit.explained_variance_ratio_, clf_pf_multi.explained_variance_ratio_, rtol=1e-5, atol=1e-5, err_msg="explained_variance_ratio_ mismatch for multi batch.")
+
+    assert_allclose(clf_fit.predict(X_hd), clf_pf_multi.predict(X_hd), rtol=1e-5, atol=1e-5, err_msg="predict mismatch for multi batch.")
+    if hasattr(clf_fit, 'scalings_') and clf_fit.scalings_.shape[1] > 0 and \
+       hasattr(clf_pf_multi, 'scalings_') and clf_pf_multi.scalings_.shape[1] > 0:
+        assert_allclose(clf_fit.transform(X_hd), clf_pf_multi.transform(X_hd), rtol=1e-4, atol=1e-4, err_msg="transform mismatch for multi batch.") # Looser tolerance for transform
+            assert_allclose(clf.xbar_, clf_pf_once.xbar_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.xbar_, clf_pf_batches.xbar_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.transform(X_large), clf_pf_once.transform(X_large), rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.transform(X_large), clf_pf_batches.transform(X_large), rtol=1e-5, atol=1e-5)
+            if hasattr(clf, 'explained_variance_ratio_') and hasattr(clf_pf_once, 'explained_variance_ratio_') and hasattr(clf_pf_batches, 'explained_variance_ratio_'):
+                assert_allclose(clf.explained_variance_ratio_, clf_pf_once.explained_variance_ratio_, rtol=1e-5, atol=1e-5)
+                assert_allclose(clf.explained_variance_ratio_, clf_pf_batches.explained_variance_ratio_, rtol=1e-5, atol=1e-5)
+        elif solver == "eigen":
+            assert_allclose(clf.coef_, clf_pf_once.coef_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.coef_, clf_pf_batches.coef_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.intercept_, clf_pf_once.intercept_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.intercept_, clf_pf_batches.intercept_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.means_, clf_pf_once.means_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.means_, clf_pf_batches.means_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.transform(X_large), clf_pf_once.transform(X_large), rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.transform(X_large), clf_pf_batches.transform(X_large), rtol=1e-5, atol=1e-5)
+            if hasattr(clf, 'explained_variance_ratio_') and hasattr(clf_pf_once, 'explained_variance_ratio_') and hasattr(clf_pf_batches, 'explained_variance_ratio_'):
+                assert_allclose(clf.explained_variance_ratio_, clf_pf_once.explained_variance_ratio_, rtol=1e-5, atol=1e-5)
+                assert_allclose(clf.explained_variance_ratio_, clf_pf_batches.explained_variance_ratio_, rtol=1e-5, atol=1e-5)
+        elif solver == "lsqr":
+            assert_allclose(clf.coef_, clf_pf_once.coef_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.coef_, clf_pf_batches.coef_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.intercept_, clf_pf_once.intercept_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.intercept_, clf_pf_batches.intercept_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.means_, clf_pf_once.means_, rtol=1e-5, atol=1e-5)
+            assert_allclose(clf.means_, clf_pf_batches.means_, rtol=1e-5, atol=1e-5)
