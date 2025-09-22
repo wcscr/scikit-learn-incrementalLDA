@@ -227,9 +227,9 @@ Full links are collected in **§10 References** below.
 
 ## 2) Deliverables
 
-- [ ] `IncrementalLinearDiscriminantAnalysis` implementation.
-- [ ] Comprehensive tests in `sklearn/discriminant_analysis/tests/test_incremental_lda.py`.
-- [ ] Docstring + short user‑guide addition + What’s New entry.
+- [x] `IncrementalLinearDiscriminantAnalysis` implementation.
+- [x] Comprehensive tests in `sklearn/tests/test_incremental_lda.py` (batch vs. incremental, sample-weight, error handling).
+- [x] Docstring + short user‑guide addition + What’s New entry.
 - [ ] PR with benchmarks and limitations clearly stated.
 
 ---
@@ -244,23 +244,23 @@ Full links are collected in **§10 References** below.
 
 ## 4) Plan of Work (Milestones)
 
-**M1 – Skeleton & Stats**  
-- [ ] Scaffolding class + parameters + `_reset_stats`.  
-- [ ] Implement numerically stable streaming stats (`N`, `mu`, `M2`; plus per‑class).  
-- [ ] `partial_fit` first‑call (`classes=`) and subsequent‑call logic; validate inputs & tags.
+**M1 – Skeleton & Stats**
+- [x] Scaffolding class + parameters + `_reset_stats`.
+- [x] Implement numerically stable streaming stats (`N`, `mu`, `M2`; plus per‑class).
+- [x] `partial_fit` first‑call (`classes=`) and subsequent‑call logic; validate inputs & tags.
 
-**M2 – Solvers**  
-- [ ] `'lsqr'`: pooled biased covariance + fixed shrinkage + solve; compute `coef_`, `intercept_`.  
-- [ ] `'eigen'`: generalized eigenproblem + ridge; fill `scalings_`, `transform`.  
-- [ ] `'svd'`: exact‑from‑moments path; optional `svd_method='randomized'`.
+**M2 – Solvers**
+- [x] `'lsqr'`: pooled biased covariance + fixed shrinkage + solve; compute `coef_`, `intercept_`.
+- [x] `'eigen'`: generalized eigenproblem + ridge; fill `scalings_`, `transform`.
+- [x] `'svd'`: exact‑from‑moments path; optional `svd_method='randomized'` (randomized path deferred).
 
-**M3 – Public API & Attributes**  
-- [ ] `predict`, `predict_proba`, `decision_function`, `transform`, `score`.  
-- [ ] `store_covariance`, `n_components` caps, `priors` handling, `sample_weight`.
+**M3 – Public API & Attributes**
+- [x] `predict`, `predict_proba`, `decision_function`, `transform`, `score`.
+- [x] `store_covariance`, `n_components` caps, `priors` handling, `sample_weight`.
 
-**M4 – Tests & Docs**  
-- [ ] Write tests (API, equivalence, edge, performance).  
-- [ ] Docstrings; user‑guide addition.
+**M4 – Tests & Docs**
+- [x] Write tests (API, equivalence, edge, performance).
+- [x] Docstrings; user‑guide addition.
 
 **M5 – Polish**  
 - [ ] Lints/static checks, coverage ≥90%.  
@@ -298,22 +298,19 @@ _(Adjust milestones as needed; update dates in the Progress Log.)_
 
 ## 8) Test Matrix (quick checklist)
 
-- [ ] Solvers: `svd`, `lsqr`, `eigen` × shrinkage: `None`, `0.2`, `'auto'` (skip `'svd'`+shrinkage).  
-- [ ] Datasets: Iris; `make_classification` with `(n=200, p=20)` and `(n=50, p=2000)`; and a class‑imbalance case.  
-- [ ] Batch vs. incremental: predictions ≥ 99.5% identical; decision_function & transform close (solver‑specific tolerances).  
-- [ ] `sample_weight` parity; `n_components` shape checks.  
-- [ ] Error handling: unseen classes; invalid shrinkage with `'svd'`; unsupported `covariance_estimator` in `partial_fit`.
+- [x] Solvers: `svd`, `lsqr`, `eigen` × shrinkage: `None`, `0.2` (covered in `test_incremental_matches_batch_solver`; `'auto'` pending implementation).
+- [ ] Datasets: Iris; `make_classification` with `(n=200, p=20)` and `(n=50, p=2000)`; and a class‑imbalance case (additional synthetic regimes still TODO).
+- [x] Batch vs. incremental: predictions ≥ 99.5% identical; decision_function & transform close (asserted against batch LDA).
+- [x] `sample_weight` parity; `n_components` shape checks (fit + partial_fit equivalence and transform shape tests).
+- [x] Error handling: unseen classes; invalid shrinkage with `'svd'`; unsupported `covariance_estimator` in `partial_fit`.
 
 ---
 
 ## 9) Progress Log
 
-_YYYY‑MM‑DD_ — Initialized branch; added class skeleton and stats accumulators.  
-_YYYY‑MM‑DD_ — Implemented `'lsqr'` path (fixed shrinkage), passing initial tests.  
-_YYYY‑MM‑DD_ — Implemented `'eigen'` path; added generalized eigen + ridge.  
-_YYYY‑MM‑DD_ — Implemented `'svd'` from second moments; added optional randomized path.  
-_YYYY‑MM‑DD_ — Wrote equivalence tests; achieved ≥99.5% prediction match on Iris and synthetic.  
-_YYYY‑MM‑DD_ — Docs and What’s New; lints clean; opened PR #xxxx.
+2025-09-22 — Implemented ILDA class skeleton, parameter wiring, and streaming statistics helpers (global + per-class) with stable merges.
+2025-09-22 — Wired solver recomputation (`lsqr`, `eigen`, `svd`) using accumulated stats, including shrinkage handling and binary-shape adjustments.
+2025-09-22 — Added incremental test suite (batch parity, sample-weight equivalence, error handling, n_components) plus user guide + What's New updates.
 
 (Keep appending entries.)
 

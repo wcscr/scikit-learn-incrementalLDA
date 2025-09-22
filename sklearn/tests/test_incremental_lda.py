@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from sklearn.covariance import LedoitWolf
 from sklearn.datasets import load_iris, make_classification
 from sklearn.discriminant_analysis import (
     IncrementalLinearDiscriminantAnalysis,
@@ -103,3 +104,57 @@ def test_partial_fit_rejects_unseen_class():
         y_bad = y[30:60].copy()
         y_bad[0] = y.max() + 1
         ilda.partial_fit(X[30:60], y_bad)
+
+
+def test_partial_fit_sample_weight_matches_repetition():
+    X, y = make_classification(
+        n_samples=90, n_features=5, n_informative=3, n_classes=3, random_state=0
+    )
+    rng = np.random.default_rng(1)
+    sample_weight = rng.integers(1, 4, size=X.shape[0]).astype(float)
+
+    repeated_X = np.repeat(X, sample_weight.astype(int), axis=0)
+    repeated_y = np.repeat(y, sample_weight.astype(int), axis=0)
+
+    lda = LinearDiscriminantAnalysis().fit(repeated_X, repeated_y)
+
+    ilda = IncrementalLinearDiscriminantAnalysis()
+    classes = np.unique(y)
+    for X_batch, y_batch, sw_batch in _iterate_batches(
+        X, y, sample_weight=sample_weight
+    ):
+        ilda.partial_fit(X_batch, y_batch, classes=classes, sample_weight=sw_batch)
+
+    np.testing.assert_array_equal(ilda.predict(X), lda.predict(X))
+    np.testing.assert_allclose(
+        ilda.decision_function(X), lda.decision_function(X), rtol=1e-5, atol=1e-8
+    )
+
+
+def test_svd_shrinkage_not_supported():
+    X, y = load_iris(return_X_y=True)
+    classes = np.unique(y)
+    ilda = IncrementalLinearDiscriminantAnalysis(solver="svd", shrinkage=0.1)
+    with pytest.raises(NotImplementedError, match="shrinkage not supported"):
+        ilda.partial_fit(X, y, classes=classes)
+
+
+def test_partial_fit_rejects_covariance_estimator():
+    X, y = load_iris(return_X_y=True)
+    classes = np.unique(y)
+    ilda = IncrementalLinearDiscriminantAnalysis(covariance_estimator=LedoitWolf())
+    with pytest.raises(
+        NotImplementedError, match="covariance_estimator is not supported"
+    ):
+        ilda.partial_fit(X, y, classes=classes)
+
+
+def test_transform_respects_n_components():
+    X, y = load_iris(return_X_y=True)
+    classes = np.unique(y)
+    ilda = IncrementalLinearDiscriminantAnalysis(n_components=1, solver="svd")
+    for X_batch, y_batch, _ in _iterate_batches(X, y):
+        ilda.partial_fit(X_batch, y_batch, classes=classes)
+
+    transformed = ilda.transform(X)
+    assert transformed.shape == (X.shape[0], 1)
