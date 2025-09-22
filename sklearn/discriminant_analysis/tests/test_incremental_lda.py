@@ -20,6 +20,17 @@ def _iterate_batches(X, y, sample_weight=None, n_splits=3):
         yield X_batch, y_batch, sw_batch
 
 
+def _assert_transform_allclose(actual, expected, *, rtol=1e-5, atol=1e-8):
+    if actual.shape[1] == 0:
+        np.testing.assert_array_equal(actual, expected)
+        return
+
+    alignment = np.sign(np.sum(actual * expected, axis=0, keepdims=True))
+    alignment[alignment == 0] = 1.0
+    adjusted_actual = actual * alignment
+    np.testing.assert_allclose(adjusted_actual, expected, rtol=rtol, atol=atol)
+
+
 @pytest.mark.parametrize(
     "solver, shrinkage",
     [
@@ -32,7 +43,7 @@ def _iterate_batches(X, y, sample_weight=None, n_splits=3):
         ("eigen", "auto"),
     ],
 )
-def test_incremental_matches_batch_solver(solver, shrinkage):
+def test_incremental_matches_batch_solver_on_iris(solver, shrinkage):
     data = load_iris()
     X, y = data.data, data.target
 
@@ -63,9 +74,100 @@ def test_incremental_matches_batch_solver(solver, shrinkage):
     )
 
     if solver in {"svd", "eigen"}:
-        np.testing.assert_allclose(
+        _assert_transform_allclose(
             ilda.transform(X), lda.transform(X), rtol=1e-5, atol=1e-8
         )
+
+
+@pytest.mark.parametrize(
+    "solver, shrinkage",
+    [
+        ("svd", None),
+        ("lsqr", None),
+        ("lsqr", 0.2),
+        ("lsqr", "auto"),
+        ("eigen", None),
+        ("eigen", 0.2),
+        ("eigen", "auto"),
+    ],
+)
+def test_incremental_matches_batch_solver_on_moderate_dataset(solver, shrinkage):
+    X, y = make_classification(
+        n_samples=240,
+        n_features=20,
+        n_informative=15,
+        n_redundant=0,
+        n_classes=3,
+        class_sep=2.0,
+        flip_y=0.0,
+        n_clusters_per_class=1,
+        random_state=42,
+    )
+
+    lda_kwargs = {"solver": solver}
+    if solver != "svd" and shrinkage is not None:
+        lda_kwargs["shrinkage"] = shrinkage
+
+    lda = LinearDiscriminantAnalysis(**lda_kwargs)
+    lda.fit(X, y)
+
+    ilda_kwargs = {"solver": solver}
+    if solver != "svd" and shrinkage is not None:
+        ilda_kwargs["shrinkage"] = shrinkage
+    if solver == "svd":
+        ilda_kwargs["store_covariance"] = True
+
+    ilda = IncrementalLinearDiscriminantAnalysis(**ilda_kwargs)
+    classes = np.unique(y)
+    for X_batch, y_batch, _ in _iterate_batches(X, y, n_splits=4):
+        ilda.partial_fit(X_batch, y_batch, classes=classes)
+
+    np.testing.assert_array_equal(ilda.predict(X), lda.predict(X))
+    np.testing.assert_allclose(
+        ilda.decision_function(X), lda.decision_function(X), rtol=1e-5, atol=1e-8
+    )
+    np.testing.assert_allclose(
+        ilda.predict_proba(X), lda.predict_proba(X), rtol=1e-5, atol=1e-8
+    )
+
+    if solver in {"svd", "eigen"}:
+        _assert_transform_allclose(
+            ilda.transform(X), lda.transform(X), rtol=1e-5, atol=1e-8
+        )
+
+
+def test_incremental_matches_batch_solver_on_high_dimensional_data():
+    X, y = make_classification(
+        n_samples=90,
+        n_features=2000,
+        n_informative=60,
+        n_redundant=0,
+        n_repeated=0,
+        n_classes=3,
+        class_sep=2.0,
+        flip_y=0.0,
+        n_clusters_per_class=1,
+        random_state=1,
+    )
+
+    lda = LinearDiscriminantAnalysis(solver="svd", store_covariance=True)
+    lda.fit(X, y)
+
+    ilda = IncrementalLinearDiscriminantAnalysis(solver="svd", store_covariance=True)
+    classes = np.unique(y)
+    for X_batch, y_batch, _ in _iterate_batches(X, y, n_splits=5):
+        ilda.partial_fit(X_batch, y_batch, classes=classes)
+
+    np.testing.assert_array_equal(ilda.predict(X), lda.predict(X))
+    np.testing.assert_allclose(
+        ilda.decision_function(X), lda.decision_function(X), rtol=2e-5, atol=1e-7
+    )
+    np.testing.assert_allclose(
+        ilda.predict_proba(X), lda.predict_proba(X), rtol=2e-5, atol=1e-8
+    )
+    _assert_transform_allclose(
+        ilda.transform(X), lda.transform(X), rtol=2e-5, atol=1e-8
+    )
 
 
 def test_incremental_sample_weight_matches_repetition():
