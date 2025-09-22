@@ -311,6 +311,7 @@ _(Adjust milestones as needed; update dates in the Progress Log.)_
 2025-09-22 — Implemented ILDA class skeleton, parameter wiring, and streaming statistics helpers (global + per-class) with stable merges.
 2025-09-22 — Wired solver recomputation (`lsqr`, `eigen`, `svd`) using accumulated stats, including shrinkage handling and binary-shape adjustments.
 2025-09-22 — Added incremental test suite (batch parity, sample-weight equivalence, error handling, n_components) plus user guide + What's New updates.
+2025-09-23 — Investigated `pytest` warnings: forcing `-W error` shows they are `RuntimeWarning: divide by zero encountered in log` emitted when `_recompute_model` updates `intercept_` using `np.log(self.priors_)` while at least one class still has zero cumulative weight (i.e., has not appeared in any processed mini-batch yet). The warnings surface for all solvers once two classes have been observed but before the final class shows up; they disappear once every class has contributed positive weight. Functionally, unseen classes continue to have prior 0 (so they are never predicted), but the repeated warnings are noisy—consider guarding the log with `np.errstate` or skipping intercept updates for zero-prior classes in a follow-up.
 
 (Keep appending entries.)
 
