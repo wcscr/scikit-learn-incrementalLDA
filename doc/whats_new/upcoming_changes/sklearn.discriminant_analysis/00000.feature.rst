@@ -1,0 +1,4 @@
+- Added :class:`~sklearn.discriminant_analysis.IncrementalLinearDiscriminantAnalysis`,
+  an incremental variant of linear discriminant analysis supporting streaming
+  updates via :meth:`partial_fit` with the ``'svd'``, ``'lsqr'``, and ``'eigen'``
+  solvers.
