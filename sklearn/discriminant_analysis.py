@@ -1376,7 +1376,34 @@ class IncrementalLinearDiscriminantAnalysis(
         self._validate_params()
         if not self.warm_start or not getattr(self, "_stats_initialized", False):
             self._reset()
+        y = validate_data(self, y=y)
+
         classes = np.unique(y)
+        if classes.size < 2:
+            raise ValueError(
+                "fit requires at least two classes; "
+                f"got {classes.size} class{'es' if classes.size != 1 else ''}"
+            )
+
+        if sample_weight is not None:
+            checked_sample_weight = _check_sample_weight(
+                sample_weight,
+                y,
+            )
+            positive_mask = checked_sample_weight > 0
+            if not np.any(positive_mask):
+                raise ValueError(
+                    "fit requires at least two classes with positive sample_weight; "
+                    "got 0 classes"
+                )
+            positive_classes = np.unique(y[positive_mask])
+            if positive_classes.size < 2:
+                raise ValueError(
+                    "fit requires at least two classes with positive sample_weight; "
+                    f"got {positive_classes.size} class"
+                    f"{'es' if positive_classes.size != 1 else ''}"
+                )
+
         return self.partial_fit(X, y, classes=classes, sample_weight=sample_weight)
 
     @_fit_context(prefer_skip_nested_validation=False)
@@ -1390,7 +1417,11 @@ class IncrementalLinearDiscriminantAnalysis(
                 )
             classes = np.unique(classes)
             if classes.shape[0] < 2:
-                raise ValueError("partial_fit requires at least two classes")
+                raise ValueError(
+                    "partial_fit requires at least two classes; "
+                    f"got {classes.shape[0]} class"
+                    f"{'es' if classes.shape[0] != 1 else ''}"
+                )
             self.classes_ = classes
         else:
             if classes is not None:
