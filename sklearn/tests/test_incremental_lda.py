@@ -26,8 +26,10 @@ def _iterate_batches(X, y, sample_weight=None, n_splits=3):
         ("svd", None),
         ("lsqr", None),
         ("lsqr", 0.2),
+        ("lsqr", "auto"),
         ("eigen", None),
         ("eigen", 0.2),
+        ("eigen", "auto"),
     ],
 )
 def test_incremental_matches_batch_solver(solver, shrinkage):
@@ -85,6 +87,33 @@ def test_incremental_sample_weight_matches_repetition():
     np.testing.assert_array_equal(ilda.predict(X), lda.predict(X))
     np.testing.assert_allclose(
         ilda.decision_function(X), lda.decision_function(X), rtol=1e-5, atol=1e-8
+    )
+
+
+@pytest.mark.parametrize("solver", ["lsqr", "eigen"])
+def test_incremental_auto_shrinkage_with_sample_weight_matches_batch(solver):
+    X, y = make_classification(
+        n_samples=160, n_features=8, n_informative=5, n_classes=3, random_state=7
+    )
+    rng = np.random.default_rng(4)
+    sample_weight = rng.integers(1, 4, size=X.shape[0]).astype(float)
+
+    repeated_X = np.repeat(X, sample_weight.astype(int), axis=0)
+    repeated_y = np.repeat(y, sample_weight.astype(int), axis=0)
+
+    lda = LinearDiscriminantAnalysis(solver=solver, shrinkage="auto")
+    lda.fit(repeated_X, repeated_y)
+
+    ilda = IncrementalLinearDiscriminantAnalysis(solver=solver, shrinkage="auto")
+    classes = np.unique(y)
+    for X_batch, y_batch, sw_batch in _iterate_batches(
+        X, y, sample_weight=sample_weight, n_splits=4
+    ):
+        ilda.partial_fit(X_batch, y_batch, classes=classes, sample_weight=sw_batch)
+
+    np.testing.assert_array_equal(ilda.predict(X), lda.predict(X))
+    np.testing.assert_allclose(
+        ilda.decision_function(X), lda.decision_function(X), rtol=2e-4, atol=1e-7
     )
 
 

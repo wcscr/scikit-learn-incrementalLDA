@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import warnings
+from collections import deque
 from numbers import Integral, Real
 
 import numpy as np
@@ -17,7 +18,12 @@ from sklearn.base import (
     TransformerMixin,
     _fit_context,
 )
-from sklearn.covariance import empirical_covariance, ledoit_wolf, shrunk_covariance
+from sklearn.covariance import (
+    empirical_covariance,
+    ledoit_wolf,
+    ledoit_wolf_shrinkage,
+    shrunk_covariance,
+)
 from sklearn.linear_model._base import LinearClassifierMixin
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils._array_api import _expit, device, get_namespace, size
@@ -917,9 +923,10 @@ class IncrementalLinearDiscriminantAnalysis(
 
     shrinkage : 'auto' or float, default=None
         Shrinkage parameter for the ``'lsqr'`` and ``'eigen'`` solvers. The
-        ``'svd'`` solver does not support shrinkage. Shrinkage is currently
-        supported for explicit float values. The ``'auto'`` mode is reserved
-        for future work and will raise a ``NotImplementedError``.
+        ``'svd'`` solver does not support shrinkage. A float provides a fixed
+        shrinkage coefficient while ``'auto'`` estimates a Ledoit-Wolf
+        shrinkage value from a rolling buffer of recent within-class
+        residuals.
 
     priors : array-like of shape (n_classes,), default=None
         Class priors. If None, priors are inferred from the data seen so far.
@@ -990,8 +997,13 @@ class IncrementalLinearDiscriminantAnalysis(
     -----
     The implementation stores only aggregate statistics, enabling streaming
     updates without retaining past samples. Support for shrinkage
-    ``shrinkage='auto'`` and randomized SVD will be added in future work.
+    ``shrinkage='auto'`` relies on a rolling buffer of within-class residuals
+    (4096 vectors by default) to estimate a Ledoit-Wolf shrinkage coefficient.
+    Randomized SVD will be added in future work.
     """
+
+    __metadata_request__partial_fit = {"classes": True, "sample_weight": True}
+    _auto_shrinkage_max_samples = 4096
 
     _parameter_constraints: dict = {
         "solver": [StrOptions({"svd", "lsqr", "eigen"})],
@@ -1049,6 +1061,8 @@ class IncrementalLinearDiscriminantAnalysis(
             "_mean_total_",
             "_m2_total_",
             "_n_features_out",
+            "_auto_shrinkage_class_buffers_",
+            "_auto_shrinkage_total_buffer_",
         ]
         for attr in attributes:
             if hasattr(self, attr):
@@ -1063,6 +1077,17 @@ class IncrementalLinearDiscriminantAnalysis(
         self._total_weight_ = 0.0
         self._mean_total_ = np.zeros(n_features, dtype=dtype)
         self._m2_total_ = np.zeros((n_features, n_features), dtype=dtype)
+        if self._using_auto_shrinkage():
+            self._auto_shrinkage_class_buffers_ = [
+                deque(maxlen=self._auto_shrinkage_max_samples)
+                for _ in range(n_classes)
+            ]
+            self._auto_shrinkage_total_buffer_ = deque(
+                maxlen=self._auto_shrinkage_max_samples
+            )
+        else:
+            self._auto_shrinkage_class_buffers_ = None
+            self._auto_shrinkage_total_buffer_ = None
 
     def _check_priors(self, dtype):
         if self.priors is None:
@@ -1098,6 +1123,59 @@ class IncrementalLinearDiscriminantAnalysis(
             mean_batch,
             m2_batch,
         )
+        if self._using_auto_shrinkage():
+            sqrt_w = np.sqrt(sample_weight.astype(np.float64, copy=False))
+            self._append_samples_to_buffer(
+                getattr(self, "_auto_shrinkage_total_buffer_", None), X, sqrt_w
+            )
+
+    def _using_auto_shrinkage(self):
+        return self.shrinkage == "auto" and self.solver in {"lsqr", "eigen"}
+
+    def _append_samples_to_buffer(self, buffer, samples, sqrt_weights):
+        if buffer is None or samples.size == 0:
+            return
+        if samples.ndim == 1:
+            samples = samples.reshape(1, -1)
+        sqrt_weights = np.asarray(sqrt_weights, dtype=np.float64)
+        if sqrt_weights.ndim == 0:
+            sqrt_weights = np.repeat(sqrt_weights, samples.shape[0])
+        for sample, sw in zip(samples, sqrt_weights):
+            sample_arr = np.asarray(sample, dtype=np.float64)
+            weight = float(sw) ** 2
+            integer = int(np.floor(weight))
+            fractional = weight - integer
+            for _ in range(integer):
+                buffer.append((sample_arr, 1.0))
+            if fractional > 1e-12:
+                buffer.append((sample_arr, np.sqrt(fractional)))
+
+    def _compute_shrinkage_from_buffer(self, buffer, mean, scale):
+        if buffer is None or len(buffer) <= 1:
+            return 0.0
+        samples = np.array([entry[0] for entry in buffer], dtype=np.float64)
+        sqrt_weights = np.array([entry[1] for entry in buffer], dtype=np.float64)
+        if samples.shape[0] <= 1:
+            return 0.0
+        residuals = (samples - mean) * sqrt_weights[:, None]
+        data_scaled = residuals / scale
+        return float(ledoit_wolf_shrinkage(data_scaled, assume_centered=False))
+
+    def _auto_shrunk_covariance(self, covariance, buffer, mean):
+        if buffer is None or len(buffer) <= 1:
+            return covariance
+        dtype = covariance.dtype
+        covariance64 = covariance.astype(np.float64, copy=False)
+        scale = np.sqrt(np.clip(np.diag(covariance64), 0, None))
+        scale[scale == 0] = 1.0
+        shrinkage = self._compute_shrinkage_from_buffer(buffer, mean, scale)
+        if shrinkage == 0:
+            return covariance
+        scale_matrix = scale[:, None] * scale[None, :]
+        cov_scaled = covariance64 / scale_matrix
+        cov_shrunk_scaled = shrunk_covariance(cov_scaled, shrinkage)
+        cov_shrunk = scale_matrix * cov_shrunk_scaled
+        return cov_shrunk.astype(dtype, copy=False)
 
     def _update_class_stats(self, X, y_encoded, sample_weight):
         for class_idx in np.unique(y_encoded):
@@ -1123,6 +1201,12 @@ class IncrementalLinearDiscriminantAnalysis(
                 mean_batch,
                 m2_batch,
             )
+            if self._using_auto_shrinkage():
+                class_buffers = getattr(self, "_auto_shrinkage_class_buffers_", None)
+                if class_buffers is not None:
+                    buffer = class_buffers[class_idx]
+                    sqrt_w = np.sqrt(w.astype(np.float64, copy=False))
+                    self._append_samples_to_buffer(buffer, Xk, sqrt_w)
 
     def _pooled_covariance(self, dtype):
         n_features = self._class_means_.shape[1]
@@ -1134,36 +1218,30 @@ class IncrementalLinearDiscriminantAnalysis(
                 cov_k = np.zeros((n_features, n_features), dtype=dtype)
             else:
                 cov_k = self._class_m2_[idx] / weight
+            if isinstance(self.shrinkage, Real):
+                cov_k = shrunk_covariance(cov_k, float(self.shrinkage))
+            elif self._using_auto_shrinkage():
+                class_buffers = getattr(self, "_auto_shrinkage_class_buffers_", None)
+                buffer = None if class_buffers is None else class_buffers[idx]
+                cov_k = self._auto_shrunk_covariance(
+                    cov_k, buffer, self._class_means_[idx]
+                )
             class_covariances.append(cov_k)
             pooled += self.priors_[idx] * cov_k
         self._class_covariances_ = class_covariances
         return pooled
 
     def _solve_lsqr(self, pooled_covariance):
-        if self.shrinkage == "auto":
-            raise NotImplementedError(
-                "shrinkage='auto' is not yet supported for the incremental LDA"
-            )
-        cov = pooled_covariance
-        if isinstance(self.shrinkage, Real):
-            cov = shrunk_covariance(cov, self.shrinkage)
-        self.covariance_ = cov
-        solution = linalg.lstsq(cov, self.means_.T)[0]
+        self.covariance_ = pooled_covariance
+        solution = linalg.lstsq(pooled_covariance, self.means_.T)[0]
         self.coef_ = solution.T
         self.intercept_ = -0.5 * np.sum(self.means_ * self.coef_, axis=1)
         self.intercept_ += np.log(self.priors_)
 
     def _solve_eigen(self, pooled_covariance, total_covariance):
-        if self.shrinkage == "auto":
-            raise NotImplementedError(
-                "shrinkage='auto' is not yet supported for the incremental LDA"
-            )
-        Sw = pooled_covariance
-        if isinstance(self.shrinkage, Real):
-            Sw = shrunk_covariance(Sw, self.shrinkage)
-        self.covariance_ = Sw
-        Sb = total_covariance - Sw
-        evals, evecs = linalg.eigh(Sb, Sw)
+        self.covariance_ = pooled_covariance
+        Sb = total_covariance - pooled_covariance
+        evals, evecs = linalg.eigh(Sb, pooled_covariance)
         order = np.argsort(evals)[::-1]
         evals = evals[order]
         evecs = evecs[:, order]
@@ -1171,7 +1249,9 @@ class IncrementalLinearDiscriminantAnalysis(
         if total > 0:
             self.explained_variance_ratio_ = (evals / total)[: self._max_components]
         else:
-            self.explained_variance_ratio_ = np.zeros((0,), dtype=Sw.dtype)
+            self.explained_variance_ratio_ = np.zeros(
+                (0,), dtype=pooled_covariance.dtype
+            )
         self.scalings_ = evecs
         self.coef_ = self.means_ @ evecs @ evecs.T
         self.intercept_ = -0.5 * np.sum(self.means_ * self.coef_, axis=1)
@@ -1262,8 +1342,17 @@ class IncrementalLinearDiscriminantAnalysis(
 
         pooled_covariance = self._pooled_covariance(dtype)
         total_covariance = self._m2_total_ / max(self._total_weight_, 1.0)
-        if self.solver == "eigen" and isinstance(self.shrinkage, Real):
-            total_covariance = shrunk_covariance(total_covariance, self.shrinkage)
+        if self.solver == "eigen":
+            if isinstance(self.shrinkage, Real):
+                total_covariance = shrunk_covariance(
+                    total_covariance, float(self.shrinkage)
+                )
+            elif self._using_auto_shrinkage():
+                total_covariance = self._auto_shrunk_covariance(
+                    total_covariance,
+                    getattr(self, "_auto_shrinkage_total_buffer_", None),
+                    self._mean_total_,
+                )
 
         if self.solver == "svd":
             self._solve_svd(pooled_covariance, dtype)
