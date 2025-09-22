@@ -27,7 +27,10 @@ same API as the batch estimator and updates class statistics through
 :meth:`~discriminant_analysis.IncrementalLinearDiscriminantAnalysis.partial_fit`
 calls on successive mini-batches. All three solvers (``'svd'``, ``'lsqr'`` and
 ``'eigen'``) are supported, enabling streaming classification and incremental
-dimensionality reduction without storing past samples.
+dimensionality reduction without storing past samples. Shrinkage with
+``shrinkage='auto'`` for the ``'lsqr'`` and ``'eigen'`` solvers relies on a
+rolling buffer of recent residuals to approximate the Ledoit-Wolf coefficient in
+an online fashion.
 
 .. |ldaqda| image:: ../auto_examples/classification/images/sphx_glr_plot_lda_qda_001.png
         :target: ../auto_examples/classification/plot_lda_qda.html

@@ -1,4 +1,6 @@
 - Added :class:`~sklearn.discriminant_analysis.IncrementalLinearDiscriminantAnalysis`,
   an incremental variant of linear discriminant analysis supporting streaming
   updates via :meth:`partial_fit` with the ``'svd'``, ``'lsqr'``, and ``'eigen'``
-  solvers.
+  solvers. The ``'lsqr'`` and ``'eigen'`` solvers include support for
+  ``shrinkage='auto'`` using a streaming Ledoit-Wolf estimate derived from a
+  rolling residual buffer.
