@@ -24,9 +24,17 @@ from sklearn.utils._array_api import _expit, device, get_namespace, size
 from sklearn.utils._param_validation import HasMethods, Interval, StrOptions
 from sklearn.utils.extmath import softmax
 from sklearn.utils.multiclass import check_classification_targets, unique_labels
-from sklearn.utils.validation import check_is_fitted, validate_data
+from sklearn.utils.validation import (
+    _check_sample_weight,
+    check_is_fitted,
+    validate_data,
+)
 
-__all__ = ["LinearDiscriminantAnalysis", "QuadraticDiscriminantAnalysis"]
+__all__ = [
+    "LinearDiscriminantAnalysis",
+    "QuadraticDiscriminantAnalysis",
+    "IncrementalLinearDiscriminantAnalysis",
+]
 
 
 def _cov(X, shrinkage=None, covariance_estimator=None):
@@ -166,6 +174,55 @@ def _class_cov(X, y, priors, shrinkage=None, covariance_estimator=None):
         Xg = X[y == group, :]
         cov += priors[idx] * np.atleast_2d(_cov(Xg, shrinkage, covariance_estimator))
     return cov
+
+
+def _merge_second_order_statistics(
+    weight_a, mean_a, m2_a, weight_b, mean_b, m2_b
+):
+    """Merge weighted means and second order moments.
+
+    Parameters
+    ----------
+    weight_a : float
+        Sum of sample weights for the first set.
+
+    mean_a : ndarray of shape (n_features,)
+        Mean vector of the first set.
+
+    m2_a : ndarray of shape (n_features, n_features)
+        Second central moment matrix of the first set.
+
+    weight_b : float
+        Sum of sample weights for the second set.
+
+    mean_b : ndarray of shape (n_features,)
+        Mean vector of the second set.
+
+    m2_b : ndarray of shape (n_features, n_features)
+        Second central moment matrix of the second set.
+
+    Returns
+    -------
+    weight : float
+        Total sum of sample weights.
+
+    mean : ndarray of shape (n_features,)
+        Updated mean vector.
+
+    m2 : ndarray of shape (n_features, n_features)
+        Updated second central moment matrix.
+    """
+
+    if weight_b == 0:
+        return weight_a, mean_a, m2_a
+    if weight_a == 0:
+        return weight_b, mean_b, m2_b
+
+    total_weight = weight_a + weight_b
+    delta = mean_b - mean_a
+    mean = mean_a + delta * (weight_b / total_weight)
+    m2 = m2_a + m2_b + np.outer(delta, delta) * (weight_a * weight_b / total_weight)
+    return total_weight, mean, m2
 
 
 class DiscriminantAnalysisPredictionMixin:
@@ -834,6 +891,477 @@ class LinearDiscriminantAnalysis(
         tags.array_api_support = True
         return tags
 
+
+class IncrementalLinearDiscriminantAnalysis(
+    ClassNamePrefixFeaturesOutMixin,
+    LinearClassifierMixin,
+    TransformerMixin,
+    BaseEstimator,
+):
+    """Incremental Linear Discriminant Analysis.
+
+    This estimator implements an online variant of Linear Discriminant Analysis
+    (LDA). The model parameters are updated from mini-batches using
+    :meth:`partial_fit`, without requiring access to previously seen samples.
+
+    Parameters are consistent with :class:`LinearDiscriminantAnalysis`. The
+    estimator maintains class-wise sufficient statistics (counts, means and
+    within-class scatter) together with global totals. These statistics are
+    updated in a numerically stable fashion using Pébay's streaming formulas.
+    After each update the linear model is recomputed for the requested solver.
+
+    Parameters
+    ----------
+    solver : {'svd', 'lsqr', 'eigen'}, default='svd'
+        Solver to use. See :class:`LinearDiscriminantAnalysis` for details.
+
+    shrinkage : 'auto' or float, default=None
+        Shrinkage parameter for the ``'lsqr'`` and ``'eigen'`` solvers. The
+        ``'svd'`` solver does not support shrinkage. Shrinkage is currently
+        supported for explicit float values. The ``'auto'`` mode is reserved
+        for future work and will raise a ``NotImplementedError``.
+
+    priors : array-like of shape (n_classes,), default=None
+        Class priors. If None, priors are inferred from the data seen so far.
+
+    n_components : int, default=None
+        Number of components for dimensionality reduction. Only used by the
+        ``'svd'`` and ``'eigen'`` solvers. If None, ``min(n_classes - 1,
+        n_features)`` is used.
+
+    store_covariance : bool, default=False
+        If True and ``solver='svd'``, store the pooled covariance matrix.
+
+    tol : float, default=1e-4
+        Threshold used by the ``'svd'`` solver when determining effective
+        rank.
+
+    warm_start : bool, default=False
+        If True, successive calls to :meth:`fit` will reuse the state learned
+        by previous calls instead of restarting from scratch.
+
+    svd_method : {'auto', 'cov', 'randomized'}, default='auto'
+        Strategy used by the ``'svd'`` solver. The ``'cov'`` strategy rebuilds
+        the solver from the accumulated covariance statistics. Other options
+        are reserved for future extensions.
+
+    random_state : int, RandomState instance or None, default=None
+        Controls the randomness of the optional randomized SVD path. Currently
+        unused. Pass an int for reproducible results across calls.
+
+    covariance_estimator : estimator, default=None
+        Placeholder for compatibility with :class:`LinearDiscriminantAnalysis`.
+        ``partial_fit`` raises ``NotImplementedError`` when a custom covariance
+        estimator that does not implement ``partial_fit`` is provided.
+
+    Attributes
+    ----------
+    classes_ : ndarray of shape (n_classes,)
+        Class labels known to the classifier.
+
+    coef_ : ndarray of shape (n_features,) or (n_classes, n_features)
+        Weight vector(s).
+
+    intercept_ : ndarray of shape (n_classes,)
+        Intercept term(s).
+
+    covariance_ : ndarray of shape (n_features, n_features)
+        Pooled within-class covariance matrix. Only computed when requested by
+        the solver.
+
+    explained_variance_ratio_ : ndarray of shape (n_components,)
+        Percentage of variance explained by each selected component. Only
+        available for the ``'svd'`` and ``'eigen'`` solvers.
+
+    means_ : ndarray of shape (n_classes, n_features)
+        Class-wise means.
+
+    priors_ : ndarray of shape (n_classes,)
+        Class prior probabilities.
+
+    scalings_ : ndarray of shape (n_features, n_features)
+        Transformation matrix used by :meth:`transform` when supported by the
+        solver.
+
+    xbar_ : ndarray of shape (n_features,)
+        Overall weighted mean. Only computed when ``solver='svd'``.
+
+    Notes
+    -----
+    The implementation stores only aggregate statistics, enabling streaming
+    updates without retaining past samples. Support for shrinkage
+    ``shrinkage='auto'`` and randomized SVD will be added in future work.
+    """
+
+    _parameter_constraints: dict = {
+        "solver": [StrOptions({"svd", "lsqr", "eigen"})],
+        "shrinkage": [StrOptions({"auto"}), Interval(Real, 0, 1, closed="both"), None],
+        "priors": ["array-like", None],
+        "n_components": [Interval(Integral, 1, None, closed="left"), None],
+        "store_covariance": ["boolean"],
+        "tol": [Interval(Real, 0, None, closed="left")],
+        "warm_start": ["boolean"],
+        "svd_method": [StrOptions({"auto", "cov", "randomized"})],
+        "random_state": ["random_state"],
+        "covariance_estimator": [HasMethods("fit"), None],
+    }
+
+    def __init__(
+        self,
+        *,
+        solver="svd",
+        shrinkage=None,
+        priors=None,
+        n_components=None,
+        store_covariance=False,
+        tol=1e-4,
+        warm_start=False,
+        svd_method="auto",
+        random_state=None,
+        covariance_estimator=None,
+    ):
+        self.solver = solver
+        self.shrinkage = shrinkage
+        self.priors = priors
+        self.n_components = n_components
+        self.store_covariance = store_covariance
+        self.tol = tol
+        self.warm_start = warm_start
+        self.svd_method = svd_method
+        self.random_state = random_state
+        self.covariance_estimator = covariance_estimator
+
+    def _reset(self):
+        attributes = [
+            "classes_",
+            "coef_",
+            "intercept_",
+            "covariance_",
+            "explained_variance_ratio_",
+            "means_",
+            "priors_",
+            "scalings_",
+            "xbar_",
+            "_class_weight_sum_",
+            "_class_means_",
+            "_class_m2_",
+            "_total_weight_",
+            "_mean_total_",
+            "_m2_total_",
+            "_n_features_out",
+        ]
+        for attr in attributes:
+            if hasattr(self, attr):
+                delattr(self, attr)
+        self._stats_initialized = False
+        self._model_ready = False
+
+    def _init_stats(self, n_classes, n_features, dtype):
+        self._class_weight_sum_ = np.zeros(n_classes, dtype=np.float64)
+        self._class_means_ = np.zeros((n_classes, n_features), dtype=dtype)
+        self._class_m2_ = np.zeros((n_classes, n_features, n_features), dtype=dtype)
+        self._total_weight_ = 0.0
+        self._mean_total_ = np.zeros(n_features, dtype=dtype)
+        self._m2_total_ = np.zeros((n_features, n_features), dtype=dtype)
+
+    def _check_priors(self, dtype):
+        if self.priors is None:
+            priors = self._class_weight_sum_ / self._total_weight_
+        else:
+            priors = np.asarray(self.priors, dtype=dtype)
+            if priors.shape[0] != self.classes_.shape[0]:
+                raise ValueError("Number of priors must match number of classes")
+            if np.any(priors < 0):
+                raise ValueError("priors must be non-negative")
+            if abs(priors.sum() - 1.0) > 1e-5:
+                warnings.warn("The priors do not sum to 1. Renormalizing", UserWarning)
+                priors = priors / priors.sum()
+        self.priors_ = priors
+
+    def _update_global_stats(self, X, sample_weight):
+        weight_batch = float(np.sum(sample_weight))
+        if weight_batch == 0:
+            return
+        mean_batch = np.average(X, axis=0, weights=sample_weight)
+        diff = X - mean_batch
+        weighted_diff = diff * sample_weight[:, None]
+        m2_batch = diff.T @ weighted_diff
+        (
+            self._total_weight_,
+            self._mean_total_,
+            self._m2_total_,
+        ) = _merge_second_order_statistics(
+            self._total_weight_,
+            self._mean_total_,
+            self._m2_total_,
+            weight_batch,
+            mean_batch,
+            m2_batch,
+        )
+
+    def _update_class_stats(self, X, y_encoded, sample_weight):
+        for class_idx in np.unique(y_encoded):
+            mask = y_encoded == class_idx
+            w = sample_weight[mask]
+            weight_batch = float(np.sum(w))
+            if weight_batch == 0:
+                continue
+            Xk = X[mask]
+            mean_batch = np.average(Xk, axis=0, weights=w)
+            diff = Xk - mean_batch
+            weighted_diff = diff * w[:, None]
+            m2_batch = diff.T @ weighted_diff
+            (
+                self._class_weight_sum_[class_idx],
+                self._class_means_[class_idx],
+                self._class_m2_[class_idx],
+            ) = _merge_second_order_statistics(
+                float(self._class_weight_sum_[class_idx]),
+                self._class_means_[class_idx],
+                self._class_m2_[class_idx],
+                weight_batch,
+                mean_batch,
+                m2_batch,
+            )
+
+    def _pooled_covariance(self, dtype):
+        n_features = self._class_means_.shape[1]
+        pooled = np.zeros((n_features, n_features), dtype=dtype)
+        class_covariances = []
+        for idx in range(self.classes_.shape[0]):
+            weight = self._class_weight_sum_[idx]
+            if weight <= 0:
+                cov_k = np.zeros((n_features, n_features), dtype=dtype)
+            else:
+                cov_k = self._class_m2_[idx] / weight
+            class_covariances.append(cov_k)
+            pooled += self.priors_[idx] * cov_k
+        self._class_covariances_ = class_covariances
+        return pooled
+
+    def _solve_lsqr(self, pooled_covariance):
+        if self.shrinkage == "auto":
+            raise NotImplementedError(
+                "shrinkage='auto' is not yet supported for the incremental LDA"
+            )
+        cov = pooled_covariance
+        if isinstance(self.shrinkage, Real):
+            cov = shrunk_covariance(cov, self.shrinkage)
+        self.covariance_ = cov
+        solution = linalg.lstsq(cov, self.means_.T)[0]
+        self.coef_ = solution.T
+        self.intercept_ = -0.5 * np.sum(self.means_ * self.coef_, axis=1)
+        self.intercept_ += np.log(self.priors_)
+
+    def _solve_eigen(self, pooled_covariance, total_covariance):
+        if self.shrinkage == "auto":
+            raise NotImplementedError(
+                "shrinkage='auto' is not yet supported for the incremental LDA"
+            )
+        Sw = pooled_covariance
+        if isinstance(self.shrinkage, Real):
+            Sw = shrunk_covariance(Sw, self.shrinkage)
+        self.covariance_ = Sw
+        Sb = total_covariance - Sw
+        evals, evecs = linalg.eigh(Sb, Sw)
+        order = np.argsort(evals)[::-1]
+        evals = evals[order]
+        evecs = evecs[:, order]
+        total = np.sum(evals)
+        if total > 0:
+            self.explained_variance_ratio_ = (evals / total)[: self._max_components]
+        else:
+            self.explained_variance_ratio_ = np.zeros((0,), dtype=Sw.dtype)
+        self.scalings_ = evecs
+        self.coef_ = self.means_ @ evecs @ evecs.T
+        self.intercept_ = -0.5 * np.sum(self.means_ * self.coef_, axis=1)
+        self.intercept_ += np.log(self.priors_)
+
+    def _solve_svd(self, pooled_covariance, dtype):
+        if self.shrinkage is not None:
+            raise NotImplementedError("shrinkage not supported with 'svd' solver.")
+        if self.svd_method not in {"auto", "cov"}:
+            raise NotImplementedError(
+                "svd_method='randomized' is not yet implemented for incremental LDA"
+            )
+        Sw = np.sum(self._class_m2_, axis=0)
+        total_weight = self._total_weight_
+        n_classes = self.classes_.shape[0]
+        n_features = self._class_means_.shape[1]
+        std = np.sqrt(np.clip(np.diag(Sw), 0, None) / max(total_weight, 1.0))
+        std[std == 0] = 1.0
+        fac = 1.0 / max(total_weight - n_classes, 1.0)
+        scaling = Sw.copy()
+        inv_std = 1.0 / std
+        scaling *= fac
+        scaling = (inv_std[:, None] * scaling) * inv_std[None, :]
+        evals, evecs = linalg.eigh(scaling)
+        order = np.argsort(evals)[::-1]
+        evals = evals[order]
+        evecs = evecs[:, order]
+        S = np.sqrt(np.clip(evals, 0.0, None))
+        rank = np.sum(S > self.tol)
+        if rank == 0:
+            rank = 1
+        scalings = (evecs[:, :rank] * inv_std[:, None]) / S[:rank]
+
+        fac_between = 1.0 if n_classes == 1 else 1.0 / (n_classes - 1)
+        centered = (self.means_ - self.xbar_) * np.sqrt(self.priors_)[:, None]
+        X = np.sqrt(total_weight * fac_between) * centered @ scalings
+        _, S2, Vt = linalg.svd(X, full_matrices=False)
+        if S2.size == 0 or S2[0] == 0:
+            rank2 = 0
+        else:
+            rank2 = np.sum(S2 > self.tol * S2[0])
+        if rank2 == 0:
+            self.explained_variance_ratio_ = np.zeros((0,), dtype=dtype)
+        else:
+            self.explained_variance_ratio_ = (S2**2 / np.sum(S2**2))[
+                : self._max_components
+            ]
+        self.scalings_ = scalings @ Vt.T[:, :rank2]
+        coef = (self.means_ - self.xbar_) @ self.scalings_
+        self.intercept_ = -0.5 * np.sum(coef**2, axis=1) + np.log(self.priors_)
+        self.coef_ = coef @ self.scalings_.T
+        self.intercept_ -= self.xbar_ @ self.coef_.T
+        if self.store_covariance:
+            self.covariance_ = pooled_covariance
+
+    def _recompute_model(self, dtype):
+        if self._total_weight_ <= 0:
+            return
+        active_classes = np.sum(self._class_weight_sum_ > 0)
+        if active_classes < 2:
+            return
+        self.means_ = self._class_means_.astype(dtype, copy=True)
+        self.xbar_ = self._mean_total_.astype(dtype, copy=True)
+        self._check_priors(dtype)
+
+        n_features = self._class_means_.shape[1]
+        n_classes = self.classes_.shape[0]
+        if n_classes < 2:
+            raise ValueError(
+                "The number of classes has to be greater than one; got %d class"
+                % (n_classes)
+            )
+        max_components = min(n_classes - 1, n_features)
+        if self.n_components is None:
+            self._max_components = max_components
+        else:
+            if self.n_components > max_components:
+                raise ValueError(
+                    "n_components cannot be larger than min(n_features, n_classes - 1)."
+                )
+            self._max_components = self.n_components
+
+        if self.covariance_estimator is not None:
+            raise NotImplementedError(
+                "covariance_estimator is not supported in IncrementalLinearDiscriminantAnalysis"
+            )
+
+        pooled_covariance = self._pooled_covariance(dtype)
+        total_covariance = self._m2_total_ / max(self._total_weight_, 1.0)
+        if self.solver == "eigen" and isinstance(self.shrinkage, Real):
+            total_covariance = shrunk_covariance(total_covariance, self.shrinkage)
+
+        if self.solver == "svd":
+            self._solve_svd(pooled_covariance, dtype)
+        elif self.solver == "lsqr":
+            self._solve_lsqr(pooled_covariance)
+        elif self.solver == "eigen":
+            self._solve_eigen(pooled_covariance, total_covariance)
+
+        if size(self.classes_) == 2:
+            coef = self.coef_[1, :] - self.coef_[0, :]
+            self.coef_ = coef.reshape(1, -1)
+            intercept = self.intercept_[1] - self.intercept_[0]
+            self.intercept_ = np.array([intercept], dtype=self.coef_.dtype)
+
+        if hasattr(self, "_max_components"):
+            self._n_features_out = self._max_components
+        self._model_ready = True
+
+    @_fit_context(prefer_skip_nested_validation=False)
+    def fit(self, X, y, sample_weight=None):
+        self._validate_params()
+        if not self.warm_start or not getattr(self, "_stats_initialized", False):
+            self._reset()
+        classes = np.unique(y)
+        return self.partial_fit(X, y, classes=classes, sample_weight=sample_weight)
+
+    @_fit_context(prefer_skip_nested_validation=False)
+    def partial_fit(self, X, y, classes=None, sample_weight=None):
+        self._validate_params()
+        first_call = not getattr(self, "_stats_initialized", False)
+        if first_call:
+            if classes is None:
+                raise ValueError("classes must be provided on the first call to partial_fit")
+            classes = np.unique(classes)
+            if classes.shape[0] < 2:
+                raise ValueError("partial_fit requires at least two classes")
+            self.classes_ = classes
+        else:
+            if classes is not None:
+                classes = np.unique(classes)
+                if not np.array_equal(classes, self.classes_):
+                    raise ValueError("`classes` parameter must contain the same values as during initialization")
+
+        X, y = validate_data(
+            self,
+            X,
+            y,
+            ensure_min_samples=1,
+            dtype=[np.float64, np.float32],
+            reset=first_call,
+        )
+        check_classification_targets(y)
+        sample_weight = _check_sample_weight(sample_weight, X, dtype=X.dtype)
+
+        if first_call:
+            self._init_stats(self.classes_.shape[0], X.shape[1], X.dtype)
+            self._stats_initialized = True
+
+        encoded = np.searchsorted(self.classes_, y)
+        if np.any(encoded >= self.classes_.shape[0]) or np.any(
+            self.classes_[encoded] != y
+        ):
+            raise ValueError("y contains previously unseen labels")
+
+        self._update_global_stats(X, sample_weight)
+        self._update_class_stats(X, encoded, sample_weight)
+        self._recompute_model(X.dtype)
+        return self
+
+    def transform(self, X):
+        if self.solver == "lsqr":
+            raise NotImplementedError(
+                "transform not implemented for 'lsqr' solver (use 'svd' or 'eigen')."
+            )
+        check_is_fitted(self)
+        X = validate_data(self, X, reset=False)
+        if self.solver == "svd":
+            X_new = (X - self.xbar_) @ self.scalings_
+        else:  # eigen solver
+            X_new = X @ self.scalings_
+        return X_new[:, : self._max_components]
+
+    def predict_proba(self, X):
+        check_is_fitted(self)
+        decision = self.decision_function(X)
+        if size(self.classes_) == 2:
+            proba = _expit(decision)
+            return np.vstack([1 - proba, proba]).T
+        return softmax(decision)
+
+    def predict_log_proba(self, X):
+        prediction = self.predict_proba(X)
+        info = np.finfo(prediction.dtype)
+        smallest = getattr(info, "smallest_normal", info.tiny)
+        prediction[prediction == 0.0] += smallest
+        return np.log(prediction)
+
+    def __sklearn_is_fitted__(self):
+        return getattr(self, "_model_ready", False)
 
 class QuadraticDiscriminantAnalysis(
     DiscriminantAnalysisPredictionMixin, ClassifierMixin, BaseEstimator

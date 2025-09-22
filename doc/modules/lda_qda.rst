@@ -17,6 +17,18 @@ These classifiers are attractive because they have closed-form solutions that
 can be easily computed, are inherently multiclass, have proven to work well in
 practice, and have no hyperparameters to tune.
 
+Incremental Linear Discriminant Analysis
+=======================================
+
+:class:`~discriminant_analysis.IncrementalLinearDiscriminantAnalysis` provides
+an online counterpart to
+:class:`~discriminant_analysis.LinearDiscriminantAnalysis`. It maintains the
+same API as the batch estimator and updates class statistics through
+:meth:`~discriminant_analysis.IncrementalLinearDiscriminantAnalysis.partial_fit`
+calls on successive mini-batches. All three solvers (``'svd'``, ``'lsqr'`` and
+``'eigen'``) are supported, enabling streaming classification and incremental
+dimensionality reduction without storing past samples.
+
 .. |ldaqda| image:: ../auto_examples/classification/images/sphx_glr_plot_lda_qda_001.png
         :target: ../auto_examples/classification/plot_lda_qda.html
         :scale: 80
