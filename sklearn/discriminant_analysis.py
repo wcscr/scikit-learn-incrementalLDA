@@ -1076,7 +1076,7 @@ class IncrementalLinearDiscriminantAnalysis(
             if abs(priors.sum() - 1.0) > 1e-5:
                 warnings.warn("The priors do not sum to 1. Renormalizing", UserWarning)
                 priors = priors / priors.sum()
-        self.priors_ = priors
+        self.priors_ = priors.astype(dtype, copy=False)
 
     def _update_global_stats(self, X, sample_weight):
         weight_batch = float(np.sum(sample_weight))
