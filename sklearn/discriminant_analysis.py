@@ -31,9 +31,9 @@ from sklearn.utils.validation import (
 )
 
 __all__ = [
+    "IncrementalLinearDiscriminantAnalysis",
     "LinearDiscriminantAnalysis",
     "QuadraticDiscriminantAnalysis",
-    "IncrementalLinearDiscriminantAnalysis",
 ]
 
 
@@ -1256,7 +1256,8 @@ class IncrementalLinearDiscriminantAnalysis(
 
         if self.covariance_estimator is not None:
             raise NotImplementedError(
-                "covariance_estimator is not supported in IncrementalLinearDiscriminantAnalysis"
+                "covariance_estimator is not supported in "
+                "IncrementalLinearDiscriminantAnalysis"
             )
 
         pooled_covariance = self._pooled_covariance(dtype)
@@ -1295,7 +1296,9 @@ class IncrementalLinearDiscriminantAnalysis(
         first_call = not getattr(self, "_stats_initialized", False)
         if first_call:
             if classes is None:
-                raise ValueError("classes must be provided on the first call to partial_fit")
+                raise ValueError(
+                    "classes must be provided on the first call to partial_fit"
+                )
             classes = np.unique(classes)
             if classes.shape[0] < 2:
                 raise ValueError("partial_fit requires at least two classes")
@@ -1304,7 +1307,10 @@ class IncrementalLinearDiscriminantAnalysis(
             if classes is not None:
                 classes = np.unique(classes)
                 if not np.array_equal(classes, self.classes_):
-                    raise ValueError("`classes` parameter must contain the same values as during initialization")
+                    raise ValueError(
+                        "`classes` parameter must contain the same values as during "
+                        "initialization"
+                    )
 
         X, y = validate_data(
             self,
