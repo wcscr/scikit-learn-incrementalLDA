@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import numbers
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Iterable, List, Optional
@@ -32,6 +33,15 @@ class LDAResult:
     max_decision_difference: Optional[float] = None
     _predictions: Optional[np.ndarray] = field(default=None, repr=False)
     _decision_values: Optional[np.ndarray] = field(default=None, repr=False)
+
+
+@dataclass
+class ColumnSpec:
+    title: str
+    attr: str
+    min_width: int
+    align_right: bool
+    precision: Optional[int] = None
 
 
 def _parse_shrinkage(value: str) -> Optional[float | str]:
@@ -73,12 +83,12 @@ def _generate_dataset(
     )
 
 
-def _format_value(value, *, width: int, precision: int = 4) -> str:
+def _format_value(value, *, precision: Optional[int]) -> str:
     if value is None:
-        return f"{'-':>{width}}"
-    if isinstance(value, float):
-        return f"{value:>{width}.{precision}f}"
-    return f"{value:>{width}}"
+        return "-"
+    if precision is not None and isinstance(value, numbers.Real):
+        return f"{float(value):.{precision}f}"
+    return str(value)
 
 
 def _print_results(results: Iterable[LDAResult]) -> None:
@@ -90,32 +100,74 @@ def _print_results(results: Iterable[LDAResult]) -> None:
     include_gap = any(r.accuracy_gap is not None for r in results)
     include_decision = any(r.max_decision_difference is not None for r in results)
 
-    columns = [
-        ("Estimator", "estimator", 22, False),
-        ("Solver", "solver", 6, False),
-        ("Fit time (s)", "fit_time", 14, True),
-        ("Predict time (s)", "predict_time", 17, True),
-        ("Accuracy", "accuracy", 10, True),
-        ("Balanced acc.", "balanced_accuracy", 15, True),
-        ("Batches", "n_batches", 8, False),
+    columns: List[ColumnSpec] = [
+        ColumnSpec("Estimator", "estimator", 22, align_right=False),
+        ColumnSpec("Solver", "solver", 6, align_right=False),
+        ColumnSpec("Fit time (s)", "fit_time", 14, align_right=True, precision=6),
+        ColumnSpec(
+            "Predict time (s)",
+            "predict_time",
+            17,
+            align_right=True,
+            precision=6,
+        ),
+        ColumnSpec("Accuracy", "accuracy", 10, align_right=True, precision=4),
+        ColumnSpec(
+            "Balanced acc.", "balanced_accuracy", 15, align_right=True, precision=4
+        ),
+        ColumnSpec("Batches", "n_batches", 8, align_right=True),
     ]
     if include_agreement:
-        columns.append(("Agreement", "prediction_agreement", 12, True))
+        columns.append(
+            ColumnSpec(
+                "Agreement",
+                "prediction_agreement",
+                12,
+                align_right=True,
+                precision=4,
+            )
+        )
     if include_gap:
-        columns.append(("Acc. gap", "accuracy_gap", 10, True))
+        columns.append(
+            ColumnSpec("Acc. gap", "accuracy_gap", 10, align_right=True, precision=4)
+        )
     if include_decision:
-        columns.append(("Max |Δ decision|", "max_decision_difference", 18, True))
+        columns.append(
+            ColumnSpec(
+                "Max |Δ decision|",
+                "max_decision_difference",
+                18,
+                align_right=True,
+                precision=4,
+            )
+        )
 
-    header = " | ".join(name.ljust(width) for name, _, width, _ in columns)
+    formatted_columns = []
+    for column in columns:
+        values = [
+            _format_value(getattr(res, column.attr), precision=column.precision)
+            for res in results
+        ]
+        width = max(
+            [column.min_width, len(column.title)] + [len(value) for value in values]
+        )
+        formatted_columns.append((column, width, values))
+
+    header = " | ".join(
+        column.title.rjust(width) if column.align_right else column.title.ljust(width)
+        for column, width, _ in formatted_columns
+    )
     print(header)
     print("-" * len(header))
 
-    for res in results:
+    for row_idx in range(len(results)):
         row = []
-        for _, attr, width, is_float in columns:
-            value = getattr(res, attr)
-            precision = 6 if attr in {"fit_time", "predict_time"} else 4
-            row.append(_format_value(value, width=width, precision=precision))
+        for column, width, values in formatted_columns:
+            value = values[row_idx]
+            if column.align_right:
+                row.append(value.rjust(width))
+            else:
+                row.append(value.ljust(width))
         print(" | ".join(row))
 
 
