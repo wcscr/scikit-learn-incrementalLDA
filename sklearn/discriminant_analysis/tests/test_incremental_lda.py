@@ -170,6 +170,49 @@ def test_incremental_matches_batch_solver_on_high_dimensional_data():
     )
 
 
+@pytest.mark.parametrize("solver", ["svd", "lsqr", "eigen"])
+def test_incremental_handles_class_imbalance(solver):
+    X, y = make_classification(
+        n_samples=360,
+        n_features=12,
+        n_informative=8,
+        n_redundant=0,
+        n_repeated=0,
+        n_classes=3,
+        weights=[0.7, 0.2, 0.1],
+        class_sep=2.5,
+        flip_y=0.0,
+        n_clusters_per_class=1,
+        random_state=5,
+    )
+
+    lda_kwargs = {"solver": solver}
+    if solver == "svd":
+        lda_kwargs["store_covariance"] = True
+
+    lda = LinearDiscriminantAnalysis(**lda_kwargs)
+    lda.fit(X, y)
+
+    ilda_kwargs = {"solver": solver}
+    if solver == "svd":
+        ilda_kwargs["store_covariance"] = True
+
+    ilda = IncrementalLinearDiscriminantAnalysis(**ilda_kwargs)
+    classes = np.unique(y)
+    for X_batch, y_batch, _ in _iterate_batches(X, y, n_splits=6):
+        ilda.partial_fit(X_batch, y_batch, classes=classes)
+
+    np.testing.assert_array_equal(ilda.predict(X), lda.predict(X))
+    np.testing.assert_allclose(
+        ilda.decision_function(X), lda.decision_function(X), rtol=2e-5, atol=1e-7
+    )
+
+    if solver in {"svd", "eigen"}:
+        _assert_transform_allclose(
+            ilda.transform(X), lda.transform(X), rtol=2e-5, atol=1e-8
+        )
+
+
 def test_incremental_sample_weight_matches_repetition():
     X, y = make_classification(
         n_samples=120, n_features=6, n_informative=4, n_classes=3, random_state=42
