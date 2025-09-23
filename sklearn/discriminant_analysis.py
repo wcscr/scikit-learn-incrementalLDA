@@ -993,6 +993,18 @@ class IncrementalLinearDiscriminantAnalysis(
     xbar_ : ndarray of shape (n_features,)
         Overall weighted mean. Only computed when ``solver='svd'``.
 
+    n_features_in_ : int
+        Number of features seen during :term:`fit`.
+
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during :term:`fit`. Defined only when `X` has
+        feature names that are all strings.
+
+    See Also
+    --------
+    LinearDiscriminantAnalysis : Linear Discriminant Analysis trained in batch
+        mode.
+
     Notes
     -----
     The implementation stores only aggregate statistics, enabling streaming
@@ -1000,6 +1012,20 @@ class IncrementalLinearDiscriminantAnalysis(
     ``shrinkage='auto'`` relies on a rolling buffer of within-class residuals
     (4096 vectors by default) to estimate a Ledoit-Wolf shrinkage coefficient.
     Randomized SVD will be added in future work.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from sklearn.datasets import make_classification
+    >>> from sklearn.discriminant_analysis import IncrementalLinearDiscriminantAnalysis
+    >>> X, y = make_classification(random_state=0)
+    >>> ild = IncrementalLinearDiscriminantAnalysis()
+    >>> ild.partial_fit(X[:50], y[:50], classes=np.unique(y))
+    IncrementalLinearDiscriminantAnalysis()
+    >>> ild.partial_fit(X[50:], y[50:])
+    IncrementalLinearDiscriminantAnalysis()
+    >>> ild.predict(X[:2])
+    array([0, 0])
     """
 
     __metadata_request__partial_fit = {"classes": True, "sample_weight": True}
@@ -1373,6 +1399,31 @@ class IncrementalLinearDiscriminantAnalysis(
 
     @_fit_context(prefer_skip_nested_validation=False)
     def fit(self, X, y, sample_weight=None):
+        """Fit the model according to the given training data.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Training vectors, where `n_samples` is the number of samples and
+            `n_features` is the number of features.
+
+        y : array-like of shape (n_samples,)
+            Target values.
+
+        sample_weight : array-like of shape (n_samples,), default=None
+            Sample weights. Samples with a weight of zero do not contribute to
+            the fitted model.
+
+        Returns
+        -------
+        self : object
+            Fitted estimator.
+
+        Notes
+        -----
+        This method is functionally equivalent to calling :meth:`partial_fit`
+        once with all samples and ``classes=np.unique(y)``.
+        """
         self._validate_params()
         if not self.warm_start or not getattr(self, "_stats_initialized", False):
             self._reset()
@@ -1408,6 +1459,31 @@ class IncrementalLinearDiscriminantAnalysis(
 
     @_fit_context(prefer_skip_nested_validation=False)
     def partial_fit(self, X, y, classes=None, sample_weight=None):
+        """Incrementally fit the model with a mini-batch of samples.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Training vectors, where `n_samples` is the number of samples and
+            `n_features` is the number of features.
+
+        y : array-like of shape (n_samples,)
+            Target values.
+
+        classes : array-like of shape (n_classes,), default=None
+            Array of class labels. This parameter is required on the first
+            call to :meth:`partial_fit` and must contain all classes that will
+            be observed. On subsequent calls it must be omitted or identical to
+            the class labels provided initially.
+
+        sample_weight : array-like of shape (n_samples,), default=None
+            Sample weights applied to individual samples.
+
+        Returns
+        -------
+        self : object
+            Fitted estimator.
+        """
         self._validate_params()
         first_call = not getattr(self, "_stats_initialized", False)
         if first_call:
@@ -1459,6 +1535,23 @@ class IncrementalLinearDiscriminantAnalysis(
         return self
 
     def transform(self, X):
+        """Project the data onto the most discriminative components.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data.
+
+        Returns
+        -------
+        X_new : ndarray of shape (n_samples, n_components)
+            Transformed data.
+
+        Raises
+        ------
+        NotImplementedError
+            If ``solver='lsqr'``.
+        """
         if self.solver == "lsqr":
             raise NotImplementedError(
                 "transform not implemented for 'lsqr' solver (use 'svd' or 'eigen')."
@@ -1472,6 +1565,18 @@ class IncrementalLinearDiscriminantAnalysis(
         return X_new[:, : self._max_components]
 
     def predict_proba(self, X):
+        """Estimate class probabilities for the input samples.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data.
+
+        Returns
+        -------
+        proba : ndarray of shape (n_samples, n_classes)
+            Estimated class probabilities for each sample.
+        """
         check_is_fitted(self)
         decision = self.decision_function(X)
         if size(self.classes_) == 2:
@@ -1480,6 +1585,18 @@ class IncrementalLinearDiscriminantAnalysis(
         return softmax(decision)
 
     def predict_log_proba(self, X):
+        """Estimate the logarithm of class probabilities for input samples.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data.
+
+        Returns
+        -------
+        log_proba : ndarray of shape (n_samples, n_classes)
+            Logarithm of the estimated class probabilities.
+        """
         prediction = self.predict_proba(X)
         info = np.finfo(prediction.dtype)
         smallest = getattr(info, "smallest_normal", info.tiny)
