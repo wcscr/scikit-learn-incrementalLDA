@@ -1084,6 +1084,7 @@ class IncrementalLinearDiscriminantAnalysis(
             "_class_means_",
             "_class_m2_",
             "_total_weight_",
+            "_positive_weight_count_",
             "_mean_total_",
             "_m2_total_",
             "_n_features_out",
@@ -1101,6 +1102,7 @@ class IncrementalLinearDiscriminantAnalysis(
         self._class_means_ = np.zeros((n_classes, n_features), dtype=dtype)
         self._class_m2_ = np.zeros((n_classes, n_features, n_features), dtype=dtype)
         self._total_weight_ = 0.0
+        self._positive_weight_count_ = 0
         self._mean_total_ = np.zeros(n_features, dtype=dtype)
         self._m2_total_ = np.zeros((n_features, n_features), dtype=dtype)
         if self._using_auto_shrinkage():
@@ -1528,6 +1530,30 @@ class IncrementalLinearDiscriminantAnalysis(
             self.classes_[encoded] != y
         ):
             raise ValueError("y contains previously unseen labels")
+
+        positive_mask = sample_weight > 0
+        positive_batch = int(np.count_nonzero(positive_mask))
+        current_active_mask = self._class_weight_sum_ > 0
+        active_classes_before = int(np.count_nonzero(current_active_mask))
+        if positive_batch > 0:
+            classes_in_batch = np.unique(encoded[positive_mask])
+            newly_active = int(np.count_nonzero(~current_active_mask[classes_in_batch]))
+            active_classes_after = active_classes_before + newly_active
+        else:
+            active_classes_after = active_classes_before
+
+        positive_count_after = self._positive_weight_count_ + positive_batch
+        if (
+            self.solver == "lsqr"
+            and active_classes_after >= 2
+            and active_classes_after == self.classes_.shape[0]
+            and positive_count_after <= active_classes_after
+        ):
+            raise np.linalg.LinAlgError(
+                "The number of samples must be more than the number of classes."
+            )
+
+        self._positive_weight_count_ = positive_count_after
 
         self._update_global_stats(X, sample_weight)
         self._update_class_stats(X, encoded, sample_weight)

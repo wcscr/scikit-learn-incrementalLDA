@@ -736,10 +736,6 @@ def test_raises_value_error_on_same_number_of_classes_and_samples(lda_class, sol
     clf = lda_class(solver=solver)
 
     if issubclass(lda_class, IncrementalLinearDiscriminantAnalysis):
-        if solver == "lsqr":
-            pytest.xfail(
-                "Incremental LDA 'lsqr' solver accepts data when n_samples == n_classes"
-            )
         expected_exception = ValueError if solver == "svd" else np.linalg.LinAlgError
         with pytest.raises(expected_exception):
             _fit_linear_discriminant(clf, X, y)
