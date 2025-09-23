@@ -134,6 +134,32 @@ def _synth_classification_dataset(
 
 
 @M.cache
+def _incremental_lda_dataset(
+    n_samples=200000, n_features=100, n_classes=5, dtype=np.float32
+):
+    """Generate a large dense dataset suited for incremental LDA benchmarks."""
+
+    n_informative = min(n_features, max(5, n_classes * 4))
+    X, y = make_classification(
+        n_samples=n_samples,
+        n_features=n_features,
+        n_informative=n_informative,
+        n_redundant=0,
+        n_repeated=0,
+        n_classes=n_classes,
+        n_clusters_per_class=1,
+        class_sep=2.5,
+        flip_y=0.0,
+        random_state=0,
+    )
+    X = X.astype(dtype, copy=False)
+    X = StandardScaler().fit_transform(X).astype(dtype, copy=False)
+
+    X, X_val, y, y_val = train_test_split(X, y, test_size=0.2, random_state=0)
+    return X, X_val, y, y_val
+
+
+@M.cache
 def _olivetti_faces_dataset():
     dataset = fetch_olivetti_faces(shuffle=True, random_state=42)
     faces = dataset.data
