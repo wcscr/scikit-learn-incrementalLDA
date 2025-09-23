@@ -14,8 +14,12 @@ class DocstringProperty(property):
 
     Parameters
     ----------
-    fget, fset, fdel : callable, default=None
-        Accessor functions passed to :class:`property`.
+    fget : callable, default=None
+        Getter function passed to :class:`property`.
+    fset : callable, default=None
+        Setter function passed to :class:`property`.
+    fdel : callable, default=None
+        Deleter function passed to :class:`property`.
     doc : str, default=None
         Docstring for the property. Falls back to ``fget.__doc__`` when
         omitted.
@@ -34,13 +38,49 @@ class DocstringProperty(property):
                 self.__qualname__ = func.__qualname__
 
     def getter(self, fget):
+        """Return a copy of the descriptor using *fget* as getter.
+
+        Parameters
+        ----------
+        fget : callable
+            Getter function used by the resulting descriptor.
+
+        Returns
+        -------
+        DocstringProperty
+            Copy of the descriptor using ``fget`` as getter.
+        """
         prop = type(self)(fget, self.fset, self.fdel, doc=fget.__doc__)
         return prop
 
     def setter(self, fset):
+        """Return a copy of the descriptor using *fset* as setter.
+
+        Parameters
+        ----------
+        fset : callable
+            Setter function used by the resulting descriptor.
+
+        Returns
+        -------
+        DocstringProperty
+            Copy of the descriptor using ``fset`` as setter.
+        """
         prop = type(self)(self.fget, fset, self.fdel, doc=self.__doc__)
         return prop
 
     def deleter(self, fdel):
+        """Return a copy of the descriptor using *fdel* as deleter.
+
+        Parameters
+        ----------
+        fdel : callable
+            Deleter function used by the resulting descriptor.
+
+        Returns
+        -------
+        DocstringProperty
+            Copy of the descriptor using ``fdel`` as deleter.
+        """
         prop = type(self)(self.fget, self.fset, fdel, doc=self.__doc__)
         return prop
