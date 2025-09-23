@@ -18,6 +18,7 @@ from sklearn.metrics import check_scoring, get_scorer_names
 from sklearn.metrics._scorer import _CurveScorer, _threshold_scores_to_class_labels
 from sklearn.model_selection._split import StratifiedShuffleSplit, check_cv
 from sklearn.utils import _safe_indexing, get_tags
+from sklearn.utils._docstring import DocstringProperty
 from sklearn.utils._param_validation import HasMethods, Interval, RealNotInt, StrOptions
 from sklearn.utils._response import _get_response_values_binary
 from sklearn.utils.metadata_routing import (
@@ -310,8 +311,20 @@ class FixedThresholdClassifier(BaseThresholdClassifier):
         self.pos_label = pos_label
         self.threshold = threshold
 
-    @property
+    @DocstringProperty
     def classes_(self):
+        """Class labels known to the classifier.
+
+        Returns
+        -------
+        ndarray of shape (n_classes,)
+            Class labels exposed by the underlying estimator.
+
+        Raises
+        ------
+        AttributeError
+            If the underlying estimator has not been fitted yet.
+        """
         if estimator := getattr(self, "estimator_", None):
             return estimator.classes_
         try:

@@ -14,6 +14,7 @@ from sklearn.base import TransformerMixin, _fit_context, clone
 from sklearn.exceptions import NotFittedError
 from sklearn.preprocessing import FunctionTransformer
 from sklearn.utils import Bunch
+from sklearn.utils._docstring import DocstringProperty
 from sklearn.utils._metadata_requests import METHODS
 from sklearn.utils._param_validation import HasMethods, Hidden
 from sklearn.utils._repr_html.estimator import _VisualBlock
@@ -1644,8 +1645,16 @@ class FeatureUnion(TransformerMixin, _BaseComposition):
             _safe_set_output(step, transform=transform)
         return self
 
-    @property
+    @DocstringProperty
     def named_transformers(self):
+        """Dictionary-like access to transformers by name.
+
+        Returns
+        -------
+        Bunch
+            Object with attributes corresponding to the transformers in
+            ``transformer_list``.
+        """
         # Use Bunch object to improve autocomplete
         return Bunch(**dict(self.transformer_list))
 
