@@ -159,6 +159,22 @@ Create `sklearn/discriminant_analysis/tests/test_incremental_lda.py` with **fast
 - High‑dimensional case (e.g., \(n=50, p=2000\)): ensure stability (no `LinAlgError`), runtime budgeted for CI.
 - Ill‑conditioned covariance: ridge via `tol` should stabilize and keep predictions reasonable.
 
+**D. Generic `partial_fit` compliance (mirror existing incremental classifiers)**
+- Study the `partial_fit`-oriented suites for `SGDClassifier`, `PassiveAggressiveClassifier`, `Perceptron`, `GaussianNB`, and `MiniBatchKMeans` (see `sklearn/linear_model/tests/test_sgd.py`, `sklearn/naive_bayes/tests/test_naive_bayes.py`, etc.) and adapt their generic patterns.
+- Implement dedicated tests (parameterized where possible) that assert:
+  1. The first `partial_fit` call **requires** `classes`; omitting them raises `ValueError`.
+  2. Subsequent `partial_fit` calls may omit `classes`, provided no unseen labels appear.
+  3. Passing `classes` in different orders/permutations yields identical models and predictions (class-order invariance).
+  4. Running `fit` on the full data produces the same results as streaming through `partial_fit` batches; ensure `fit` resets state and does **not** delegate to `partial_fit`.
+  5. Sequentially observing classes one at a time (while always supplying the full `classes` list) still converges to the batch model.
+  6. Model outputs (`predict`, `predict_proba`, `predict_log_proba`, `decision_function`, `transform`, `score`) remain available and numerically close after any number of `partial_fit` updates.
+  7. Learned attributes preserve dtype stability (e.g., float32 vs. float64 inputs) in line with batch LDA behavior.
+  8. Sparse input handling matches LDA expectations (raise a clear error if unsupported, or verify parity if support is added).
+  9. Supplying batches with mismatched `n_features` raises `ValueError`.
+  10. `sample_weight` updates scale statistics identically to their batch counterparts (check equivalence when weights are multiplied by a constant factor).
+  11. Single-sample / tiny-batch updates remain numerically stable and produce deterministic results when re-run with the same mini-batch sequence and `random_state`.
+  12. Later batches containing labels outside the initial `classes` argument trigger `ValueError` (no silent creation of new classes).
+
 ---
 
 ### 7) Documentation
